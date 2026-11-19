@@ -1,0 +1,6 @@
+{
+  "name": "MEDRADAR",
+  "description": "Rural healthcare intelligence, mobile clinic routing, rapid lab diagnostics, and closed-loop patient care platform prototype.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
