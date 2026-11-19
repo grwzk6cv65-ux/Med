@@ -1,15 +1,34 @@
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import express, { NextFunction, Request, Response } from 'express';
+import express, { type NextFunction, type Request, type Response } from 'express';
 import fs from 'fs';
 import nodemailer from 'nodemailer';
+import os from 'os';
 import path from 'path';
-import { createServer as createViteServer } from 'vite';
 
 dotenv.config();
 
-const PORT = Number(process.env.PORT || 3000);
-const DATA_DIR = path.resolve(process.cwd(), '.medradar-data');
+const parsedPort = Number.parseInt(process.env.PORT ?? '', 10);
+const PORT = Number.isFinite(parsedPort) && parsedPort > 0 ? parsedPort : 3000;
+
+function resolveDataDir(): string {
+  const preferredDir = path.resolve(process.cwd(), '.medradar-data');
+  try {
+    if (!fs.existsSync(preferredDir)) {
+      fs.mkdirSync(preferredDir, { recursive: true, mode: 0o700 });
+    }
+    fs.accessSync(preferredDir, fs.constants.W_OK);
+    return preferredDir;
+  } catch {
+    const fallbackDir = path.join(os.tmpdir(), 'medradar-data');
+    if (!fs.existsSync(fallbackDir)) {
+      fs.mkdirSync(fallbackDir, { recursive: true, mode: 0o700 });
+    }
+    return fallbackDir;
+  }
+}
+
+const DATA_DIR = resolveDataDir();
 const STORE_PATH = path.join(DATA_DIR, 'store.json');
 const SESSION_TTL_DEFAULT_MS = 1000 * 60 * 60 * 12; // 12 hours
 const SESSION_TTL_REMEMBER_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
@@ -431,6 +450,10 @@ async function startServer() {
   app.use((_req: Request, res: Response, next: NextFunction) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     next();
+  });
+
+  app.get('/api/health', (_req: Request, res: Response) => {
+    res.status(200).json({ ok: true, service: 'medradar', port: PORT });
   });
 
   // 1. Public capability status (NEVER returns secret values)
@@ -912,22 +935,38 @@ async function startServer() {
   });
 
   // Vite dev middleware vs static production build
-  if (process.env.NODE_ENV !== 'production') {
+  const distDir = path.resolve(process.cwd(), 'dist');
+  const isProductionRuntime =
+    process.env.NODE_ENV === 'production' ||
+    Boolean(process.env.K_SERVICE) ||
+    Boolean(process.env.CLOUD_RUN_JOB);
+
+  if (!isProductionRuntime) {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    const distDir = path.resolve(process.cwd(), 'dist');
     app.use(express.static(distDir));
-    app.get('*', (_req, res) => {
-      res.sendFile(path.join(distDir, 'index.html'));
+    app.get('*', (_req: Request, res: Response) => {
+      const indexFile = path.join(distDir, 'index.html');
+      if (fs.existsSync(indexFile)) {
+        res.sendFile(indexFile);
+      } else {
+        res.status(503).send('MEDRADAR production build not found. Run npm run build first.');
+      }
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`MEDRADAR server listening on http://0.0.0.0:${PORT}`);
+  });
+
+  server.on('error', (err) => {
+    console.error('MEDRADAR HTTP server error:', err);
+    process.exit(1);
   });
 }
 
