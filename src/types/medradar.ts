@@ -242,6 +242,35 @@ export interface RadarAssessment {
   isSimulation: true;
 }
 
+export type DoctorVerificationStatus =
+  | 'none'
+  | 'unverified'
+  | 'pending'
+  | 'approved'
+  | 'rejected';
+
+export interface DoctorVerificationRecord {
+  id: string;
+  userId: string;
+  userEmail?: string;
+  userPhone?: string;
+  fullName: string;
+  specialty: string;
+  institutionName: string;
+  licenseNumber: string;
+  issuingRegion: string;
+  issueDate: string;
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
+  status: 'pending' | 'approved' | 'rejected';
+  rejectionReason?: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  submittedAt: string;
+  updatedAt: string;
+}
+
 export interface AuthUser {
   id: string;
   firstName: string;
@@ -254,6 +283,9 @@ export interface AuthUser {
   villageName: string;
   email: string;
   accountRole: UserRole;
+  doctorVerificationStatus: DoctorVerificationStatus;
+  doctorRejectionReason?: string;
+  doctorVerifiedAt?: string;
   isSupportAdmin: boolean;
   profileCompleted: boolean;
   createdAt: string;
@@ -293,6 +325,8 @@ export interface ServerConfigStatus {
   supportEmailPreview: string;
   missingEmailVars: string[];
   supportTeamPasscodeConfigured: boolean;
+  adminConfigured: boolean;
 }
+
 
 

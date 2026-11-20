@@ -1,7 +1,7 @@
 import {
   Accessibility,
+  AlertTriangle,
   BarChart3,
-  Database,
   FileBadge2,
   FlaskConical,
   LayoutDashboard,
@@ -14,6 +14,7 @@ import {
   RefreshCcw,
   RotateCcw,
   Sparkles,
+  Stethoscope,
   Truck,
   User,
   UserCheck,
@@ -28,6 +29,7 @@ import { AiHealthRadarView } from './components/AiHealthRadarView';
 import { AnalyticsView } from './components/AnalyticsView';
 import { CareLoopJourneyView } from './components/CareLoopJourneyView';
 import { DashboardView } from './components/DashboardView';
+import { DoctorVerificationModal } from './components/DoctorVerificationModal';
 import { MedMobileView } from './components/MedMobileView';
 import { NanoCharacter } from './components/NanoCharacter';
 import { NanoOnboardingModal } from './components/NanoOnboardingModal';
@@ -112,8 +114,6 @@ function MedradarShell() {
     t,
     language,
     setLanguage,
-    role,
-    setRole,
     activeModule,
     setActiveModule,
     resetDemoData,
@@ -123,7 +123,15 @@ function MedradarShell() {
     highlightedTourTarget,
     setHighlightedTourTarget,
   } = useMedradar();
-  const { user, openAuthModal, logout } = useAuth();
+  const {
+    user,
+    loadingAuth,
+    openAuthModal,
+    logout,
+    requestDoctorCabinetAccess,
+    accessDeniedCode,
+    clearAccessDenied,
+  } = useAuth();
 
   const {
     isOnboardingOpen,
@@ -144,6 +152,38 @@ function MedradarShell() {
       }
     };
   }, []);
+
+  // Server-enforced route protection if someone manually navigates to /doctor, ?role=doctor, ?cabinet=doctor, or #doctor
+  useEffect(() => {
+    if (loadingAuth) return;
+    const inspectUrl = () => {
+      const path = window.location.pathname.toLowerCase();
+      const params = new URLSearchParams(window.location.search);
+      const hash = window.location.hash.toLowerCase();
+      const wantsDoctorRoute =
+        path === '/doctor' ||
+        path.startsWith('/doctor/') ||
+        params.get('role') === 'doctor' ||
+        params.get('cabinet') === 'doctor' ||
+        hash === '#doctor';
+
+      if (wantsDoctorRoute) {
+        void requestDoctorCabinetAccess().then((outcome) => {
+          if (outcome === 'granted') {
+            setActiveModule('dashboard');
+          }
+        });
+      }
+    };
+
+    inspectUrl();
+    window.addEventListener('popstate', inspectUrl);
+    window.addEventListener('hashchange', inspectUrl);
+    return () => {
+      window.removeEventListener('popstate', inspectUrl);
+      window.removeEventListener('hashchange', inspectUrl);
+    };
+  }, [loadingAuth, requestDoctorCabinetAccess, setActiveModule]);
 
   const handlePreviewTourModule = (mod: ModuleId, tourTarget: string) => {
     if (highlightTimerRef.current !== null) {
@@ -241,28 +281,50 @@ function MedradarShell() {
 
         <nav className="space-y-1" aria-label="Primary Navigation">
           {NAV_ITEMS.map((item) => {
-            const Icon = item.icon;
+            const isDoctorSidebarBtn = item.id === 'dashboard' && user?.accountRole === 'doctor';
+            const Icon = isDoctorSidebarBtn ? Stethoscope : item.icon;
             const active = activeModule === item.id;
             const highlighted = highlightedTourTarget === `nav-${item.id}`;
+            const label = isDoctorSidebarBtn ? t('nav_doctor_cabinet') : t(item.labelKey);
+
             return (
               <button
                 key={item.id}
                 type="button"
-                onClick={() => {
-                  setActiveModule(item.id);
+                onClick={async () => {
+                  if (isDoctorSidebarBtn) {
+                    const outcome = await requestDoctorCabinetAccess();
+                    if (outcome === 'granted' || user?.accountRole === 'doctor') {
+                      setActiveModule('dashboard');
+                    }
+                  } else {
+                    setActiveModule(item.id);
+                  }
                   setMobileMenuOpen(false);
                 }}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 text-xs font-medium rounded-lg transition-colors whitespace-nowrap ${
+                className={`w-full flex items-center justify-between gap-2 px-3 py-2.5 text-xs font-medium rounded-lg transition-colors whitespace-nowrap ${
                   active
                     ? 'bg-emerald-500 text-zinc-950 font-semibold'
                     : 'text-zinc-300 hover:bg-zinc-900 hover:text-white'
                 } ${highlighted ? 'tour-highlight-ring' : ''}`}
               >
-                <Icon
-                  className={`w-4 h-4 shrink-0 ${active ? 'text-zinc-950' : 'text-zinc-400'}`}
-                  aria-hidden="true"
-                />
-                <span className="truncate">{t(item.labelKey)}</span>
+                <span className="flex items-center gap-3 min-w-0">
+                  <Icon
+                    className={`w-4 h-4 shrink-0 ${active ? 'text-zinc-950' : 'text-zinc-400'}`}
+                    aria-hidden="true"
+                  />
+                  <span className="truncate">{label}</span>
+                </span>
+                {isDoctorSidebarBtn && user?.doctorVerificationStatus !== 'approved' && (
+                  <span
+                    className={`w-2 h-2 rounded-full shrink-0 ${
+                      user?.doctorVerificationStatus === 'pending'
+                        ? 'bg-amber-400'
+                        : 'bg-red-400'
+                    }`}
+                    title={t(`doc_status_${user?.doctorVerificationStatus || 'unverified'}`)}
+                  />
+                )}
               </button>
             );
           })}
@@ -336,14 +398,12 @@ function MedradarShell() {
             <div className="flex items-center gap-2 text-xs text-zinc-500 whitespace-nowrap truncate">
               <span className="font-bold text-zinc-950">{t('brand')}</span>
               <span aria-hidden="true">/</span>
-              <span className="text-emerald-700 font-semibold truncate">{t(activeNav.labelKey)}</span>
+              <span className="text-emerald-700 font-semibold truncate">
+                {activeNav.id === 'dashboard' && user?.accountRole === 'doctor'
+                  ? t('nav_doctor_cabinet')
+                  : t(activeNav.labelKey)}
+              </span>
             </div>
-
-            {/* Clear DEMO DATA Label */}
-            <span className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold tracking-wide bg-zinc-950 text-emerald-400 rounded-md whitespace-nowrap">
-              <Database className="w-3 h-3" aria-hidden="true" />
-              <span>{t('demo_badge')}</span>
-            </span>
 
             {/* Offline / Online Status Indicator */}
             <button
@@ -391,38 +451,6 @@ function MedradarShell() {
                   {lang.label}
                 </button>
               ))}
-            </div>
-
-            {/* Role Switcher */}
-            <div className="hidden sm:inline-flex items-center p-0.5 bg-zinc-100 rounded-lg border border-zinc-200">
-              <button
-                type="button"
-                onClick={() => {
-                  setRole('doctor');
-                  setActiveModule('dashboard');
-                }}
-                className={`px-2.5 py-1.5 text-[11px] font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                  role === 'doctor'
-                    ? 'bg-white text-zinc-950 shadow-2xs'
-                    : 'text-zinc-600 hover:text-zinc-950'
-                }`}
-              >
-                {t('role_doctor')}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setRole('patient');
-                  setActiveModule('dashboard');
-                }}
-                className={`px-2.5 py-1.5 text-[11px] font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                  role === 'patient'
-                    ? 'bg-white text-zinc-950 shadow-2xs'
-                    : 'text-zinc-600 hover:text-zinc-950'
-                }`}
-              >
-                {t('role_patient')}
-              </button>
             </div>
 
             {/* In-App & Browser Notifications Popover */}
@@ -497,42 +525,36 @@ function MedradarShell() {
           </div>
         </header>
 
-        {/* Mobile Role & Demo Status Strip */}
-        <div className="sm:hidden px-4 py-2 bg-white border-b border-zinc-200 flex items-center justify-between gap-2">
-          <div className="inline-flex items-center p-0.5 bg-zinc-100 rounded-lg border border-zinc-200">
-            <button
-              type="button"
-              onClick={() => {
-                setRole('doctor');
-                setActiveModule('dashboard');
-              }}
-              className={`px-2.5 py-1 text-xs font-semibold rounded-md ${
-                role === 'doctor' ? 'bg-zinc-950 text-white' : 'text-zinc-600'
-              }`}
-            >
-              {t('role_doctor')}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setRole('patient');
-                setActiveModule('dashboard');
-              }}
-              className={`px-2.5 py-1 text-xs font-semibold rounded-md ${
-                role === 'patient' ? 'bg-zinc-950 text-white' : 'text-zinc-600'
-              }`}
-            >
-              {t('role_patient')}
-            </button>
-          </div>
-
-          <span className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-bold bg-zinc-950 text-emerald-400 rounded-md">
-            {t('demo_badge')}
-          </span>
-        </div>
-
         {/* Main Viewport */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-[1400px] w-full mx-auto pb-24 space-y-5">
+          {/* 403 Access Denied Banner (if patient/guest tries protected doctor URL) */}
+          {accessDeniedCode && (
+            <div
+              role="alert"
+              className="bg-red-50 border border-red-200 text-red-950 rounded-xl px-4 py-3 flex items-start justify-between gap-3 text-xs"
+            >
+              <div className="flex items-start gap-2.5">
+                <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                <div>
+                  <div className="font-bold">{t('access_denied_title')}</div>
+                  <div className="text-red-800 mt-0.5">
+                    {accessDeniedCode === 'AUTH_REQUIRED'
+                      ? t('access_denied_auth_msg')
+                      : t('access_denied_patient_msg')}
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={clearAccessDenied}
+                className="p-1 text-red-700 hover:text-red-950 rounded"
+                aria-label="Close alert"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
           {/* Offline / Pending Sync Banner */}
           {isOfflineActive && (
             <div className="bg-amber-50 border border-amber-300 text-amber-950 rounded-xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
@@ -540,7 +562,7 @@ function MedradarShell() {
                 <WifiOff className="w-4 h-4 text-amber-700 shrink-0" aria-hidden="true" />
                 <span className="font-semibold">{t('offline_mode_label')}</span>
                 <span className="text-amber-800">
-                  · {t('demo_badge')} · {t('pending_sync_label')}:{' '}
+                  · {t('pending_sync_label')}:{' '}
                   <strong className="font-mono">{pendingSync.length}</strong>
                 </span>
               </div>
@@ -598,6 +620,9 @@ function MedradarShell() {
 
       {/* Phone Registration & Login Modal */}
       <PhoneAuthModal />
+
+      {/* Doctor Medical License Verification Modal */}
+      <DoctorVerificationModal />
 
       {/* Corner NANO Character Floating Widget */}
       <AiAssistantWidget />

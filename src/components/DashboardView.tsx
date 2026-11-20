@@ -2,16 +2,21 @@ import {
   ArrowRight,
   Bell,
   CheckCircle2,
+  Clock,
   FileBadge2,
+  Lock,
   Map as MapIcon,
   Radar,
   RefreshCcw,
+  Stethoscope,
   Truck,
 } from 'lucide-react';
 import { useMemo } from 'react';
+import { useAuth } from '../context/AuthContext';
 import { useMedradar } from '../context/MedradarContext';
 import { pickLocalized } from '../i18n/translations';
 import { evaluatePatientRadar } from '../utils/aiRadarEngine';
+import { DoctorStatusBadge } from './DoctorVerificationModal';
 import { RiskStatusTag, WorkflowStatusTag } from './StatusIndicator';
 
 export function DashboardView() {
@@ -33,6 +38,7 @@ export function DashboardView() {
     toggleReminderStatus,
     createSmartReferral,
   } = useMedradar();
+  const { user, requestDoctorCabinetAccess } = useAuth();
 
   const rankedPatients = useMemo(() => {
     return patients
@@ -74,6 +80,65 @@ export function DashboardView() {
       s.villageId === activePatientEntry.patient.villageId ||
       s.clusterId === activePatientEntry.patient.clusterId
   );
+
+  if (user?.accountRole === 'doctor' && user.doctorVerificationStatus !== 'approved') {
+    return (
+      <div className="space-y-6">
+        <div className="bg-zinc-950 text-white border border-zinc-800 rounded-2xl p-6 sm:p-8 space-y-5">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="flex items-start gap-3.5 max-w-2xl">
+              <div className="w-12 h-12 rounded-xl bg-emerald-500/15 border border-emerald-500/40 flex items-center justify-center shrink-0">
+                <Lock className="w-6 h-6 text-emerald-400" />
+              </div>
+              <div className="space-y-1.5">
+                <h1 className="text-lg sm:text-xl font-bold text-white">{t('doc_gate_title')}</h1>
+                <p className="text-xs sm:text-sm text-zinc-300 leading-relaxed">
+                  {t('doc_gate_desc')}
+                </p>
+              </div>
+            </div>
+            <DoctorStatusBadge status={user.doctorVerificationStatus} />
+          </div>
+
+          {user.doctorVerificationStatus === 'pending' && (
+            <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-xl text-xs text-zinc-200 flex items-start gap-2.5">
+              <Clock className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+              <span>{t('doc_pending_notice')}</span>
+            </div>
+          )}
+
+          {user.doctorVerificationStatus === 'rejected' && user.doctorRejectionReason && (
+            <div className="p-4 bg-red-950/50 border border-red-800/70 rounded-xl text-xs text-red-200 space-y-1">
+              <div className="font-bold">{t('doc_rejection_reason')}:</div>
+              <div>{user.doctorRejectionReason}</div>
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center gap-3 pt-1">
+            <button
+              type="button"
+              onClick={() => void requestDoctorCabinetAccess()}
+              className="inline-flex items-center gap-2 px-5 py-2.5 text-xs font-bold text-zinc-950 bg-emerald-500 hover:bg-emerald-400 rounded-xl transition-colors"
+            >
+              <Stethoscope className="w-4 h-4" />
+              <span>
+                {user.doctorVerificationStatus === 'rejected'
+                  ? t('doc_verif_resubmit')
+                  : t('doc_verif_btn')}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveModule('profile')}
+              className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-semibold text-white bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 rounded-xl transition-colors"
+            >
+              <span>{t('nav_profile')}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (role === 'patient') {
     const { patient, village, cluster, radar } = activePatientEntry;

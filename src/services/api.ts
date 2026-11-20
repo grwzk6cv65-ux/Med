@@ -1,5 +1,7 @@
 import type {
   AuthUser,
+  DoctorVerificationRecord,
+  DoctorVerificationStatus,
   ServerConfigStatus,
   SupportTicket,
   SupportTicketStatus,
@@ -55,6 +57,30 @@ async function apiFetch<T>(url: string, init: RequestInit = {}): Promise<{ statu
   return { status: resp.status, data };
 }
 
+export async function fetchProtectedDocumentBlobUrl(endpoint: string): Promise<{
+  ok: boolean;
+  objectUrl?: string;
+  mimeType?: string;
+  error?: string;
+}> {
+  const token = getStoredSessionToken();
+  const headers = new Headers();
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+  const resp = await fetch(endpoint, {
+    headers,
+    credentials: 'include',
+  });
+  if (!resp.ok) {
+    const errJson = (await resp.json().catch(() => ({}))) as { error?: string };
+    return { ok: false, error: errJson.error || `Error ${resp.status}` };
+  }
+  const blob = await resp.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  return { ok: true, objectUrl, mimeType: blob.type };
+}
+
 export async function fetchConfigStatus(): Promise<ServerConfigStatus> {
   const { data } = await apiFetch<ServerConfigStatus>('/api/config/status');
   return data;
@@ -63,11 +89,15 @@ export async function fetchConfigStatus(): Promise<ServerConfigStatus> {
 export async function fetchAuthMe(): Promise<{
   authenticated: boolean;
   user: AuthUser | null;
+  effectiveRole?: UserRole;
+  doctorVerified?: boolean;
   isSupportTeam: boolean;
 }> {
   const { data } = await apiFetch<{
     authenticated: boolean;
     user: AuthUser | null;
+    effectiveRole?: UserRole;
+    doctorVerified?: boolean;
     isSupportTeam: boolean;
   }>('/api/auth/me');
   return data;
@@ -133,8 +163,8 @@ export async function registerAccount(params: {
   email: string;
   password: string;
   confirmPassword: string;
+  accountRole: UserRole;
   villageName?: string;
-  accountRole?: UserRole;
   rememberMe?: boolean;
 }) {
   return apiFetch<AuthApiResponse>('/api/auth/register', {
@@ -164,7 +194,7 @@ export async function saveUserProfile(params: {
   phone?: string;
   villageName: string;
   email: string;
-  accountRole: UserRole;
+  accountRole?: UserRole;
 }) {
   return apiFetch<AuthApiResponse>('/api/auth/complete-profile', {
     method: 'POST',
@@ -181,7 +211,6 @@ export async function updateUserProfile(params: {
   phone: string;
   email: string;
   villageName?: string;
-  accountRole?: UserRole;
 }) {
   return apiFetch<AuthApiResponse>('/api/auth/profile', {
     method: 'PATCH',
@@ -191,6 +220,72 @@ export async function updateUserProfile(params: {
 
 export async function logoutSession() {
   return apiFetch<{ ok: boolean }>('/api/auth/logout', { method: 'POST' });
+}
+
+export async function checkDoctorAccess() {
+  return apiFetch<{
+    ok: boolean;
+    accessGranted: boolean;
+    code?: string;
+    verificationStatus?: DoctorVerificationStatus;
+    rejectionReason?: string;
+    error?: string;
+  }>('/api/doctor/access');
+}
+
+export async function fetchMyDoctorVerification() {
+  return apiFetch<{
+    ok: boolean;
+    verificationStatus?: DoctorVerificationStatus;
+    rejectionReason?: string;
+    verification?: DoctorVerificationRecord | null;
+    error?: string;
+  }>('/api/doctor/verification');
+}
+
+export async function submitDoctorVerification(params: {
+  fullName: string;
+  specialty: string;
+  institutionName: string;
+  licenseNumber: string;
+  issuingRegion: string;
+  issueDate: string;
+  documentDataUrl: string;
+  fileName: string;
+}) {
+  return apiFetch<{
+    ok: boolean;
+    user?: AuthUser;
+    verification?: DoctorVerificationRecord;
+    error?: string;
+    fieldErrors?: Record<string, string>;
+  }>('/api/doctor/verification', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+export async function fetchAdminDoctorVerifications() {
+  return apiFetch<{
+    ok: boolean;
+    verifications?: DoctorVerificationRecord[];
+    error?: string;
+  }>('/api/admin/doctor-verifications');
+}
+
+export async function decideDoctorVerification(
+  id: string,
+  decision: 'approved' | 'rejected',
+  rejectionReason?: string
+) {
+  return apiFetch<{
+    ok: boolean;
+    verification?: DoctorVerificationRecord;
+    error?: string;
+  }>(`/api/admin/doctor-verifications/${encodeURIComponent(id)}/decision`, {
+    method: 'PATCH',
+    body: JSON.stringify({ decision, rejectionReason }),
+  });
 }
 
 export async function submitSupportEmail(params: {
@@ -242,3 +337,4 @@ export async function updateSupportTicketStatus(ticketId: string, status: Suppor
     }
   );
 }
+

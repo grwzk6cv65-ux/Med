@@ -76,8 +76,7 @@ export function NanoOnboardingModal({
   onComplete,
   onPreviewModule,
 }: NanoOnboardingModalProps) {
-  const { t, language, setLanguage, role, setRole, setActiveModule, setHighlightedTourTarget } =
-    useMedradar();
+  const { t, language, setLanguage, setActiveModule, setHighlightedTourTarget } = useMedradar();
   const skipClearOnCloseRef = useRef(false);
 
   useEffect(() => {
@@ -218,64 +217,32 @@ export function NanoOnboardingModal({
                 </div>
               </div>
 
-              {/* Language (Kazakh / Russian / English) + Role Selection */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 bg-zinc-50 border border-zinc-200 rounded-xl">
-                <div>
-                  <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500 mb-2">
-                    {t('nano_pick_lang')}
-                  </div>
-                  <div className="grid grid-cols-3 gap-1.5">
-                    {(
-                      [
-                        { code: 'kk', label: 'ҚАЗ' },
-                        { code: 'ru', label: 'РУС' },
-                        { code: 'en', label: 'ENG' },
-                      ] as { code: Language; label: string }[]
-                    ).map((lang) => (
-                      <button
-                        key={lang.code}
-                        type="button"
-                        onClick={() => setLanguage(lang.code)}
-                        className={`py-2 text-xs font-semibold rounded-lg border transition-colors ${
-                          language === lang.code
-                            ? 'bg-zinc-950 text-white border-zinc-950'
-                            : 'bg-white text-zinc-700 border-zinc-200 hover:border-zinc-300'
-                        }`}
-                      >
-                        {lang.label}
-                      </button>
-                    ))}
-                  </div>
+              {/* Language (Kazakh / Russian / English) */}
+              <div className="p-4 bg-zinc-50 border border-zinc-200 rounded-xl">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500 mb-2">
+                  {t('nano_pick_lang')}
                 </div>
-
-                <div>
-                  <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500 mb-2">
-                    {t('nano_pick_role')}
-                  </div>
-                  <div className="grid grid-cols-2 gap-1.5">
+                <div className="grid grid-cols-3 gap-2">
+                  {(
+                    [
+                      { code: 'kk', label: 'ҚАЗ' },
+                      { code: 'ru', label: 'РУС' },
+                      { code: 'en', label: 'ENG' },
+                    ] as { code: Language; label: string }[]
+                  ).map((lang) => (
                     <button
+                      key={lang.code}
                       type="button"
-                      onClick={() => setRole('doctor')}
-                      className={`py-2 px-2 text-xs font-semibold rounded-lg border transition-colors truncate ${
-                        role === 'doctor'
-                          ? 'bg-emerald-600 text-white border-emerald-600'
+                      onClick={() => setLanguage(lang.code)}
+                      className={`py-2 text-xs font-semibold rounded-lg border transition-colors ${
+                        language === lang.code
+                          ? 'bg-zinc-950 text-white border-zinc-950'
                           : 'bg-white text-zinc-700 border-zinc-200 hover:border-zinc-300'
                       }`}
                     >
-                      {t('role_doctor')}
+                      {lang.label}
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => setRole('patient')}
-                      className={`py-2 px-2 text-xs font-semibold rounded-lg border transition-colors truncate ${
-                        role === 'patient'
-                          ? 'bg-emerald-600 text-white border-emerald-600'
-                          : 'bg-white text-zinc-700 border-zinc-200 hover:border-zinc-300'
-                      }`}
-                    >
-                      {t('role_patient')}
-                    </button>
-                  </div>
+                  ))}
                 </div>
               </div>
             </>

@@ -8,12 +8,13 @@ import {
   Mail,
   Phone,
   ShieldCheck,
+  Stethoscope,
   User,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useMedradar } from '../context/MedradarContext';
-import { Language } from '../types/medradar';
+import { Language, UserRole } from '../types/medradar';
 
 export const COUNTRY_CODES = [
   { code: '+7', label: '+7 (KZ/RU)' },
@@ -88,8 +89,15 @@ interface AuthFormPanelProps {
 }
 
 export function AuthFormPanel({ initialMode = 'login', onAuthSuccess }: AuthFormPanelProps) {
-  const { t, language, setRole, setActiveModule } = useMedradar();
-  const { configStatus, registerAccount, loginWithPassword, sendOtp, verifyOtp } = useAuth();
+  const { t, language, setActiveModule } = useMedradar();
+  const {
+    configStatus,
+    registerAccount,
+    loginWithPassword,
+    sendOtp,
+    verifyOtp,
+    openDoctorVerificationModal,
+  } = useAuth();
 
   const msgs = validateMessages(language);
 
@@ -98,6 +106,7 @@ export function AuthFormPanel({ initialMode = 'login', onAuthSuccess }: AuthForm
   const [smsStep, setSmsStep] = useState<'phone' | 'otp'>('phone');
 
   // Registration fields
+  const [selectedRole, setSelectedRole] = useState<UserRole | null>(null);
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [age, setAge] = useState('');
@@ -159,6 +168,9 @@ export function AuthFormPanel({ initialMode = 'login', onAuthSuccess }: AuthForm
     const phoneDigits = localPhone.replace(/\D/g, '');
     const emailClean = email.trim();
 
+    if (!selectedRole) {
+      errors.accountRole = t('auth_role_required_err');
+    }
     if (fn.length < 2) errors.firstName = msgs.firstNameReq;
     if (ln.length < 2) errors.lastName = msgs.lastNameReq;
 
@@ -197,7 +209,7 @@ export function AuthFormPanel({ initialMode = 'login', onAuthSuccess }: AuthForm
       errors.confirmPassword = msgs.passwordMismatch;
     }
 
-    if (Object.keys(errors).length > 0) {
+    if (Object.keys(errors).length > 0 || !selectedRole) {
       setFieldErrors(errors);
       return;
     }
@@ -206,6 +218,7 @@ export function AuthFormPanel({ initialMode = 'login', onAuthSuccess }: AuthForm
     setLoading(true);
     try {
       const result = await registerAccount({
+        accountRole: selectedRole,
         firstName: fn,
         lastName: ln,
         age: Number.parseInt(ageClean, 10),
@@ -219,8 +232,12 @@ export function AuthFormPanel({ initialMode = 'login', onAuthSuccess }: AuthForm
       });
 
       if (result.ok && result.user) {
-        setRole(result.user.accountRole);
-        setActiveModule('profile');
+        if (result.user.accountRole === 'doctor') {
+          setActiveModule('dashboard');
+          openDoctorVerificationModal();
+        } else {
+          setActiveModule('profile');
+        }
         onAuthSuccess?.();
       } else {
         if (result.fieldErrors) setFieldErrors(result.fieldErrors);
@@ -261,8 +278,14 @@ export function AuthFormPanel({ initialMode = 'login', onAuthSuccess }: AuthForm
       });
 
       if (result.ok && result.user) {
-        setRole(result.user.accountRole);
-        setActiveModule('profile');
+        if (result.user.accountRole === 'doctor') {
+          setActiveModule('dashboard');
+          if (result.user.doctorVerificationStatus !== 'approved') {
+            openDoctorVerificationModal();
+          }
+        } else {
+          setActiveModule('profile');
+        }
         onAuthSuccess?.();
       } else {
         if (result.fieldErrors) setFieldErrors(result.fieldErrors);
@@ -328,8 +351,14 @@ export function AuthFormPanel({ initialMode = 'login', onAuthSuccess }: AuthForm
       });
 
       if (data.ok && data.user) {
-        setRole(data.user.accountRole);
-        setActiveModule('profile');
+        if (data.user.accountRole === 'doctor') {
+          setActiveModule('dashboard');
+          if (data.user.doctorVerificationStatus !== 'approved') {
+            openDoctorVerificationModal();
+          }
+        } else {
+          setActiveModule('profile');
+        }
         onAuthSuccess?.();
       } else {
         setFormError(data.error ?? 'Verification failed.');
@@ -403,6 +432,81 @@ export function AuthFormPanel({ initialMode = 'login', onAuthSuccess }: AuthForm
 
       {mode === 'register' ? (
         <form onSubmit={handleRegisterSubmit} noValidate className="space-y-3">
+          {/* Mandatory Account Role Selection: Patient or Doctor */}
+          <div>
+            <div className="block text-xs font-semibold text-zinc-800 mb-1.5">
+              {t('auth_role_label')} <span className="text-red-600">*</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedRole('patient');
+                  clearFieldError('accountRole');
+                }}
+                aria-pressed={selectedRole === 'patient'}
+                className={`p-3 rounded-xl border text-left transition-colors flex items-start gap-2.5 ${
+                  selectedRole === 'patient'
+                    ? 'bg-zinc-950 text-white border-emerald-500 ring-2 ring-emerald-500/40'
+                    : fieldErrors.accountRole
+                      ? 'bg-red-50/40 border-red-400 text-zinc-900 hover:border-red-500'
+                      : 'bg-zinc-50 border-zinc-200 text-zinc-900 hover:border-zinc-300'
+                }`}
+              >
+                <User
+                  className={`w-4 h-4 shrink-0 mt-0.5 ${
+                    selectedRole === 'patient' ? 'text-emerald-400' : 'text-emerald-600'
+                  }`}
+                />
+                <div className="min-w-0">
+                  <div className="text-xs font-bold">{t('role_choice_patient')}</div>
+                  <div
+                    className={`text-[11px] mt-0.5 leading-snug ${
+                      selectedRole === 'patient' ? 'text-zinc-300' : 'text-zinc-500'
+                    }`}
+                  >
+                    {t('auth_role_patient_desc')}
+                  </div>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedRole('doctor');
+                  clearFieldError('accountRole');
+                }}
+                aria-pressed={selectedRole === 'doctor'}
+                className={`p-3 rounded-xl border text-left transition-colors flex items-start gap-2.5 ${
+                  selectedRole === 'doctor'
+                    ? 'bg-zinc-950 text-white border-emerald-500 ring-2 ring-emerald-500/40'
+                    : fieldErrors.accountRole
+                      ? 'bg-red-50/40 border-red-400 text-zinc-900 hover:border-red-500'
+                      : 'bg-zinc-50 border-zinc-200 text-zinc-900 hover:border-zinc-300'
+                }`}
+              >
+                <Stethoscope
+                  className={`w-4 h-4 shrink-0 mt-0.5 ${
+                    selectedRole === 'doctor' ? 'text-emerald-400' : 'text-emerald-600'
+                  }`}
+                />
+                <div className="min-w-0">
+                  <div className="text-xs font-bold">{t('role_choice_doctor')}</div>
+                  <div
+                    className={`text-[11px] mt-0.5 leading-snug ${
+                      selectedRole === 'doctor' ? 'text-zinc-300' : 'text-zinc-500'
+                    }`}
+                  >
+                    {t('auth_role_doctor_desc')}
+                  </div>
+                </div>
+              </button>
+            </div>
+            {fieldErrors.accountRole && (
+              <p className="mt-1 text-[11px] font-medium text-red-600">{fieldErrors.accountRole}</p>
+            )}
+          </div>
+
           {/* 1. First Name & 2. Last Name */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>

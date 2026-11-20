@@ -1388,9 +1388,9 @@ export const INITIAL_NOTIFICATIONS: AppNotification[] = [
     dedupKey: 'ref-REF-501',
     patientId: 'MR-1001',
     title: {
-      en: 'Upcoming Cardiology Appointment (DEMO)',
-      ru: 'Ближайший приём кардиолога (ДЕМО)',
-      kk: 'Алдағы кардиолог қабылдауы (ДЕМО)',
+      en: 'Upcoming Cardiology Appointment',
+      ru: 'Ближайший приём кардиолога',
+      kk: 'Алдағы кардиолог қабылдауы',
     },
     message: {
       en: 'Aidos Nurpeisov · 2026-11-21 at 10:30 · Korgalzhyn District Hospital.',
@@ -1407,9 +1407,9 @@ export const INITIAL_NOTIFICATIONS: AppNotification[] = [
     dedupKey: 'rem-REM-203',
     patientId: 'MR-1003',
     title: {
-      en: 'Follow-Up Due Today (DEMO)',
-      ru: 'Напоминание: контроль SpO2 сегодня (ДЕМО)',
-      kk: 'Бүгінгі еске салғыш: SpO2 бақылауы (ДЕМО)',
+      en: 'Follow-Up Due Today',
+      ru: 'Напоминание: контроль SpO2 сегодня',
+      kk: 'Бүгінгі еске салғыш: SpO2 бақылауы',
     },
     message: {
       en: 'Erlan Suleimenov · Post-Discharge SpO2 Follow-Up Consultation (15:00).',
@@ -1426,9 +1426,9 @@ export const INITIAL_NOTIFICATIONS: AppNotification[] = [
     dedupKey: 'ref-REF-506',
     patientId: 'MR-1011',
     title: {
-      en: 'Re-routing Required for Missed Visit (DEMO)',
-      ru: 'Требуется переназначение пропуска визита (ДЕМО)',
-      kk: 'Өткізілген сапар бойынша қайта бағыттау (ДЕМО)',
+      en: 'Re-routing Required for Missed Visit',
+      ru: 'Требуется переназначение пропуска визита',
+      kk: 'Өткізілген сапар бойынша қайта бағыттау',
     },
     message: {
       en: 'Askarbek Zhaksylykov · REF-506 overdue; MedMobile MM-06 support assigned.',

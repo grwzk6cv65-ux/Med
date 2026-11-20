@@ -281,7 +281,7 @@ export function generateAssistantReply(
     if (language === 'ru') {
       return {
         text: upcoming.length
-          ? `Актуальные сохранённые записи (ДЕМО-ДАННЫЕ):\n\n${listText}\n\nЧтобы записаться на новый приём или посмотреть объяснение маршрута, откройте «Паспорт и направления».`
+          ? `Актуальные сохранённые записи:\n\n${listText}\n\nЧтобы записаться на новый приём или посмотреть объяснение маршрута, откройте «Паспорт и направления».`
           : `Для ${activePatient.fullName} сейчас нет предстоящих открытых записей. Вы можете оформить новую запись в разделе «Паспорт и направления».`,
         actions: [
           { label: 'Паспорт и направления', module: 'passport_referrals', patientId: activePatient.id },
@@ -292,7 +292,7 @@ export function generateAssistantReply(
     if (language === 'kk') {
       return {
         text: upcoming.length
-          ? `Нақты сақталған жазылулар (ДЕМО ДЕРЕКТЕР):\n\n${listText}\n\nЖаңа қабылдауға жазылу үшін «Төлқұжат және жолдама» бөлімін ашыңыз.`
+          ? `Нақты сақталған жазылулар:\n\n${listText}\n\nЖаңа қабылдауға жазылу үшін «Төлқұжат және жолдама» бөлімін ашыңыз.`
           : `${activePatient.fullName} үшін алдағы ашық жазылулар жоқ. «Төлқұжат және жолдама» бөлімінде жазыла аласыз.`,
         actions: [
           { label: 'Төлқұжат және жолдама', module: 'passport_referrals', patientId: activePatient.id },
@@ -302,7 +302,7 @@ export function generateAssistantReply(
     }
     return {
       text: upcoming.length
-        ? `Actual saved upcoming appointments (DEMO DATA):\n\n${listText}\n\nOpen Passport & Referrals to book a new slot or view route explanations.`
+        ? `Actual saved upcoming appointments:\n\n${listText}\n\nOpen Passport & Referrals to book a new slot or view route explanations.`
         : `No upcoming open appointments are currently saved for ${activePatient.fullName}. You can book one in Passport & Referrals.`,
       actions: [
         { label: 'Open Passport & Referrals', module: 'passport_referrals', patientId: activePatient.id },
@@ -455,7 +455,7 @@ export function generateAssistantReply(
   // Default friendly NANO summary scoped cleanly to active role & saved data
   if (language === 'ru') {
     return {
-      text: `Я NANO, ваш помощник в MEDRADAR. Сейчас выбран профиль: ${activePatient.fullName} (ДЕМО-ДАННЫЕ).\n\nАктивных напоминаний: ${activePatientDueReminders.length}, открытых записей: ${activePatientReferrals.filter((r) => r.status !== 'completed').length}.\n\nСпросите меня про ближайшие записи, подготовку к анализам, напоминания или навигацию по сайту.`,
+      text: `Я NANO, ваш помощник в MEDRADAR. Сейчас выбран профиль: ${activePatient.fullName}.\n\nАктивных напоминаний: ${activePatientDueReminders.length}, открытых записей: ${activePatientReferrals.filter((r) => r.status !== 'completed').length}.\n\nСпросите меня про ближайшие записи, подготовку к анализам, напоминания или навигацию по сайту.`,
       actions: [
         { label: 'Мои записи', module: 'passport_referrals', patientId: activePatient.id },
         { label: '+ Создать напоминание', openReminderForm: true },
@@ -465,7 +465,7 @@ export function generateAssistantReply(
 
   if (language === 'kk') {
     return {
-      text: `Мен NANO, MEDRADAR көмекшісімін. Белсенді бейін: ${activePatient.fullName} (ДЕМО ДЕРЕКТЕР).\n\nБелсенді еске салғыштар: ${activePatientDueReminders.length}, ашық жазылулар: ${activePatientReferrals.filter((r) => r.status !== 'completed').length}.\n\nЖазылулар, талдауға дайындық немесе еске салғыштар туралы сұраңыз.`,
+      text: `Мен NANO, MEDRADAR көмекшісімін. Белсенді бейін: ${activePatient.fullName}.\n\nБелсенді еске салғыштар: ${activePatientDueReminders.length}, ашық жазылулар: ${activePatientReferrals.filter((r) => r.status !== 'completed').length}.\n\nЖазылулар, талдауға дайындық немесе еске салғыштар туралы сұраңыз.`,
       actions: [
         { label: 'Жолдамаларым', module: 'passport_referrals', patientId: activePatient.id },
         { label: '+ Еске салғыш қосу', openReminderForm: true },
@@ -474,7 +474,7 @@ export function generateAssistantReply(
   }
 
   return {
-    text: `Hi! I am NANO, your MEDRADAR guide. Active profile: ${activePatient.fullName} (DEMO DATA).\n\nDue reminders: ${activePatientDueReminders.length} · Open appointments: ${activePatientReferrals.filter((r) => r.status !== 'completed').length}.\n\nAsk me about your saved appointments, exam prep instructions, reminders, or navigating MEDRADAR.`,
+    text: `Hi! I am NANO, your MEDRADAR guide. Active profile: ${activePatient.fullName}.\n\nDue reminders: ${activePatientDueReminders.length} · Open appointments: ${activePatientReferrals.filter((r) => r.status !== 'completed').length}.\n\nAsk me about your saved appointments, exam prep instructions, reminders, or navigating MEDRADAR.`,
     actions: [
       { label: 'Saved Appointments', module: 'passport_referrals', patientId: activePatient.id },
       { label: '+ Create Reminder', openReminderForm: true },

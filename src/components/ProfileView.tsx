@@ -11,14 +11,15 @@ import {
   Phone,
   RefreshCcw,
   ShieldCheck,
+  Stethoscope,
   User,
   UserCheck,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useMedradar } from '../context/MedradarContext';
-import { UserRole } from '../types/medradar';
 import { AuthFormPanel, COUNTRY_CODES, validateMessages } from './AuthFormPanel';
+import { DoctorStatusBadge } from './DoctorVerificationModal';
 
 function extractPhoneParts(phoneE164: string, savedCC?: string, savedLocal?: string) {
   if (savedCC && savedLocal) {
@@ -40,8 +41,8 @@ function extractPhoneParts(phoneE164: string, savedCC?: string, savedLocal?: str
 }
 
 export function ProfileView() {
-  const { t, language, setRole, setActiveModule } = useMedradar();
-  const { user, loadingAuth, updateProfile, logout } = useAuth();
+  const { t, language, setActiveModule } = useMedradar();
+  const { user, loadingAuth, updateProfile, logout, requestDoctorCabinetAccess } = useAuth();
   const msgs = validateMessages(language);
 
   const [editing, setEditing] = useState(false);
@@ -52,7 +53,6 @@ export function ProfileView() {
   const [localPhone, setLocalPhone] = useState('');
   const [email, setEmail] = useState('');
   const [villageName, setVillageName] = useState('');
-  const [accountRole, setAccountRole] = useState<UserRole>('patient');
 
   const [saving, setSaving] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
@@ -71,7 +71,6 @@ export function ProfileView() {
       setLocalPhone(phoneParts.localPhone);
       setEmail(user.email || '');
       setVillageName(user.villageName || '');
-      setAccountRole(user.accountRole || 'patient');
     }
   }, [user]);
 
@@ -136,11 +135,9 @@ export function ProfileView() {
         phone: fullPhone,
         email: emailClean,
         villageName: villageName.trim(),
-        accountRole,
       });
 
       if (result.ok && result.user) {
-        setRole(result.user.accountRole);
         setEditing(false);
         setSuccessMsg(t('auth_saved_notice'));
       } else {
@@ -165,7 +162,6 @@ export function ProfileView() {
       setLocalPhone(phoneParts.localPhone);
       setEmail(user.email || '');
       setVillageName(user.villageName || '');
-      setAccountRole(user.accountRole || 'patient');
     }
     setFieldErrors({});
     setFormError(null);
@@ -290,8 +286,11 @@ export function ProfileView() {
               <h2 className="text-lg sm:text-xl font-bold text-white truncate">{displayName}</h2>
               <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 rounded-md">
                 <UserCheck className="w-3 h-3" />
-                {user.accountRole === 'doctor' ? t('role_doctor') : t('role_patient')}
+                {user.accountRole === 'doctor' ? t('role_choice_doctor') : t('role_choice_patient')}
               </span>
+              {user.accountRole === 'doctor' && (
+                <DoctorStatusBadge status={user.doctorVerificationStatus} />
+              )}
             </div>
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-zinc-400">
               <span className="inline-flex items-center gap-1.5 font-mono text-zinc-200">
@@ -402,9 +401,44 @@ export function ProfileView() {
               <div className="p-3.5 bg-zinc-50 border border-zinc-200/80 rounded-xl">
                 <div className="text-[11px] font-medium text-zinc-500">{t('auth_role_label')}</div>
                 <div className="text-sm font-semibold text-zinc-900 mt-1">
-                  {user.accountRole === 'doctor' ? t('role_doctor') : t('role_patient')}
+                  {user.accountRole === 'doctor' ? t('role_choice_doctor') : t('role_choice_patient')}
                 </div>
+                <div className="text-[11px] text-zinc-500 mt-0.5">{t('auth_role_locked_note')}</div>
               </div>
+
+              {user.accountRole === 'doctor' && (
+                <div className="sm:col-span-2 p-4 bg-zinc-950 text-white rounded-xl border border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="space-y-1.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs font-bold text-emerald-400 flex items-center gap-1.5">
+                        <Stethoscope className="w-4 h-4" />
+                        <span>{t('doc_status_label')}</span>
+                      </span>
+                      <DoctorStatusBadge status={user.doctorVerificationStatus} />
+                    </div>
+                    {user.doctorVerificationStatus === 'rejected' && user.doctorRejectionReason && (
+                      <p className="text-xs text-red-300">
+                        {t('doc_rejection_reason')}: {user.doctorRejectionReason}
+                      </p>
+                    )}
+                    {user.doctorVerificationStatus !== 'approved' && (
+                      <p className="text-[11px] text-zinc-300">{t('doc_gate_desc')}</p>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const res = await requestDoctorCabinetAccess();
+                      if (res === 'granted') setActiveModule('dashboard');
+                    }}
+                    className="px-4 py-2 text-xs font-bold bg-emerald-500 hover:bg-emerald-400 text-zinc-950 rounded-lg transition-colors whitespace-nowrap shrink-0"
+                  >
+                    {user.doctorVerificationStatus === 'approved'
+                      ? t('doc_verif_open_cabinet')
+                      : t('doc_verif_btn')}
+                  </button>
+                </div>
+              )}
             </div>
           ) : (
             <form onSubmit={handleSaveEdit} noValidate className="space-y-4">
@@ -534,33 +568,17 @@ export function ProfileView() {
                 )}
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                <div>
-                  <label htmlFor="edit-village" className="block text-xs font-semibold text-zinc-800 mb-1">
-                    {t('auth_village')}
-                  </label>
-                  <input
-                    id="edit-village"
-                    type="text"
-                    value={villageName}
-                    onChange={(e) => setVillageName(e.target.value)}
-                    className={inputClass('villageName')}
-                  />
-                </div>
-                <div>
-                  <label htmlFor="edit-role" className="block text-xs font-semibold text-zinc-800 mb-1">
-                    {t('auth_role_label')}
-                  </label>
-                  <select
-                    id="edit-role"
-                    value={accountRole}
-                    onChange={(e) => setAccountRole(e.target.value as UserRole)}
-                    className="w-full h-10 px-2.5 text-xs bg-zinc-50 border border-zinc-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-600"
-                  >
-                    <option value="patient">{t('role_patient')}</option>
-                    <option value="doctor">{t('role_doctor')}</option>
-                  </select>
-                </div>
+              <div>
+                <label htmlFor="edit-village" className="block text-xs font-semibold text-zinc-800 mb-1">
+                  {t('auth_village')}
+                </label>
+                <input
+                  id="edit-village"
+                  type="text"
+                  value={villageName}
+                  onChange={(e) => setVillageName(e.target.value)}
+                  className={inputClass('villageName')}
+                />
               </div>
 
               <div className="flex flex-wrap items-center gap-2.5 pt-2">

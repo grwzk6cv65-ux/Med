@@ -30,19 +30,18 @@ function resolveDataDir(): string {
 
 const DATA_DIR = resolveDataDir();
 const STORE_PATH = path.join(DATA_DIR, 'store.json');
+const LICENSES_DIR = path.join(DATA_DIR, 'licenses');
 const SESSION_TTL_DEFAULT_MS = 1000 * 60 * 60 * 12; // 12 hours
 const SESSION_TTL_REMEMBER_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
 const OTP_TTL_MS = 1000 * 60 * 10; // 10 minutes
+const MAX_LICENSE_FILE_BYTES = 4 * 1024 * 1024; // 4 MB
 const SESSION_COOKIE_NAME = 'medradar_session';
 const SUPPORT_TEAM_COOKIE_NAME = 'medradar_support_team';
 
-// Runtime server HMAC secret (never exposed to browser)
-const SERVER_HMAC_SECRET =
-  process.env.SESSION_SECRET && process.env.SESSION_SECRET.trim().length >= 16
-    ? process.env.SESSION_SECRET.trim()
-    : crypto.randomBytes(32).toString('hex');
+const EPHEMERAL_FALLBACK_SECRET = crypto.randomBytes(32).toString('hex');
 
 type SupportTicketStatus = 'New' | 'In Progress' | 'Resolved';
+type DoctorVerificationStatus = 'none' | 'unverified' | 'pending' | 'approved' | 'rejected';
 
 interface StoredUser {
   id: string;
@@ -57,9 +56,33 @@ interface StoredUser {
   email: string;
   passwordHash?: string;
   accountRole: 'patient' | 'doctor';
+  doctorVerificationStatus: DoctorVerificationStatus;
+  doctorRejectionReason?: string;
+  doctorVerifiedAt?: string;
   isSupportAdmin: boolean;
   profileCompleted: boolean;
   createdAt: string;
+  updatedAt: string;
+}
+
+interface StoredDoctorVerification {
+  id: string;
+  userId: string;
+  fullName: string;
+  specialty: string;
+  institutionName: string;
+  licenseNumber: string;
+  issuingRegion: string;
+  issueDate: string;
+  fileName: string;
+  storedFileKey: string;
+  mimeType: string;
+  fileSize: number;
+  status: 'pending' | 'approved' | 'rejected';
+  rejectionReason?: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  submittedAt: string;
   updatedAt: string;
 }
 
@@ -103,10 +126,28 @@ interface StoredSupportTicket {
 }
 
 interface StoreShape {
+  serverSecret?: string;
   users: StoredUser[];
   sessions: StoredSession[];
   otpChallenges: HashedOtpChallenge[];
   supportTickets: StoredSupportTicket[];
+  doctorVerifications: StoredDoctorVerification[];
+}
+
+function normalizeDoctorVerificationStatus(
+  rawStatus: unknown,
+  role: 'patient' | 'doctor'
+): DoctorVerificationStatus {
+  if (role !== 'doctor') return 'none';
+  if (
+    rawStatus === 'unverified' ||
+    rawStatus === 'pending' ||
+    rawStatus === 'approved' ||
+    rawStatus === 'rejected'
+  ) {
+    return rawStatus;
+  }
+  return 'unverified';
 }
 
 function normalizeStoredUser(raw: Partial<StoredUser>): StoredUser {
@@ -115,6 +156,7 @@ function normalizeStoredUser(raw: Partial<StoredUser>): StoredUser {
   const firstName = String(raw.firstName || parts[0] || '').trim();
   const lastName = String(raw.lastName || parts.slice(1).join(' ') || '').trim();
   const combined = `${firstName} ${lastName}`.trim() || fullName;
+  const accountRole = raw.accountRole === 'doctor' ? 'doctor' : 'patient';
   return {
     id: String(raw.id || `USR-${crypto.randomUUID()}`),
     firstName,
@@ -127,7 +169,13 @@ function normalizeStoredUser(raw: Partial<StoredUser>): StoredUser {
     villageName: String(raw.villageName || ''),
     email: String(raw.email || ''),
     passwordHash: typeof raw.passwordHash === 'string' ? raw.passwordHash : undefined,
-    accountRole: raw.accountRole === 'doctor' ? 'doctor' : 'patient',
+    accountRole,
+    doctorVerificationStatus: normalizeDoctorVerificationStatus(
+      raw.doctorVerificationStatus,
+      accountRole
+    ),
+    doctorRejectionReason: raw.doctorRejectionReason ? String(raw.doctorRejectionReason) : undefined,
+    doctorVerifiedAt: raw.doctorVerifiedAt ? String(raw.doctorVerifiedAt) : undefined,
     isSupportAdmin: Boolean(raw.isSupportAdmin),
     profileCompleted: Boolean(raw.profileCompleted),
     createdAt: String(raw.createdAt || new Date().toISOString()),
@@ -139,12 +187,17 @@ function ensureStore(): StoreShape {
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
   }
+  if (!fs.existsSync(LICENSES_DIR)) {
+    fs.mkdirSync(LICENSES_DIR, { recursive: true, mode: 0o700 });
+  }
   if (!fs.existsSync(STORE_PATH)) {
     const empty: StoreShape = {
+      serverSecret: crypto.randomBytes(32).toString('hex'),
       users: [],
       sessions: [],
       otpChallenges: [],
       supportTickets: [],
+      doctorVerifications: [],
     };
     fs.writeFileSync(STORE_PATH, JSON.stringify(empty, null, 2), { mode: 0o600 });
     return empty;
@@ -152,20 +205,51 @@ function ensureStore(): StoreShape {
   try {
     const raw = fs.readFileSync(STORE_PATH, 'utf8');
     const parsed = JSON.parse(raw) as Partial<StoreShape>;
+    const serverSecret =
+      typeof parsed.serverSecret === 'string' && parsed.serverSecret.length >= 32
+        ? parsed.serverSecret
+        : crypto.randomBytes(32).toString('hex');
     return {
+      serverSecret,
       users: Array.isArray(parsed.users) ? parsed.users.map(normalizeStoredUser) : [],
       sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
       otpChallenges: Array.isArray(parsed.otpChallenges) ? parsed.otpChallenges : [],
       supportTickets: Array.isArray(parsed.supportTickets) ? parsed.supportTickets : [],
+      doctorVerifications: Array.isArray(parsed.doctorVerifications)
+        ? parsed.doctorVerifications
+        : [],
     };
   } catch {
-    return { users: [], sessions: [], otpChallenges: [], supportTickets: [] };
+    return {
+      serverSecret: crypto.randomBytes(32).toString('hex'),
+      users: [],
+      sessions: [],
+      otpChallenges: [],
+      supportTickets: [],
+      doctorVerifications: [],
+    };
   }
+}
+
+function getEffectiveHmacSecret(store?: StoreShape): string {
+  const envSecret = (process.env.SESSION_SECRET || '').trim();
+  if (envSecret.length >= 16) return envSecret;
+  if (store?.serverSecret && store.serverSecret.length >= 32) return store.serverSecret;
+  try {
+    const loaded = ensureStore();
+    if (loaded.serverSecret && loaded.serverSecret.length >= 32) return loaded.serverSecret;
+  } catch {
+    // Fallback
+  }
+  return EPHEMERAL_FALLBACK_SECRET;
 }
 
 function saveStore(store: StoreShape): void {
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+  }
+  if (!fs.existsSync(LICENSES_DIR)) {
+    fs.mkdirSync(LICENSES_DIR, { recursive: true, mode: 0o700 });
   }
   const now = Date.now();
   store.sessions = store.sessions.filter((s) => s.expiresAt > now);
@@ -177,8 +261,8 @@ function sha256(value: string): string {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
-function hmacDigest(value: string): string {
-  return crypto.createHmac('sha256', SERVER_HMAC_SECRET).update(value).digest('hex');
+function hmacDigest(value: string, store?: StoreShape): string {
+  return crypto.createHmac('sha256', getEffectiveHmacSecret(store)).update(value).digest('hex');
 }
 
 function safeEqualHex(a: string, b: string): boolean {
@@ -215,6 +299,83 @@ function verifyPassword(password: string, storedHash?: string): boolean {
 function sanitizeUser(user: StoredUser): Omit<StoredUser, 'passwordHash'> {
   const { passwordHash: _removed, ...safeUser } = user;
   return safeUser;
+}
+
+function sanitizeVerificationRecord(
+  rec: StoredDoctorVerification,
+  user?: StoredUser
+) {
+  const { storedFileKey: _removed, ...rest } = rec;
+  return {
+    ...rest,
+    userEmail: user?.email,
+    userPhone: user?.phoneE164,
+  };
+}
+
+function parseAndValidateLicenseUpload(
+  dataUrl: string,
+  rawFileName: string
+): { ok: true; buffer: Buffer; mimeType: string; ext: string; safeFileName: string } | { ok: false; error: string } {
+  const match = /^data:(image\/jpeg|image\/png|image\/webp|application\/pdf);base64,([A-Za-z0-9+/=]+)$/.exec(
+    dataUrl.trim()
+  );
+  if (!match) {
+    return {
+      ok: false,
+      error: 'Upload a valid medical license scan or photo (JPG, PNG, WEBP, or PDF).',
+    };
+  }
+  const mimeType = match[1];
+  const base64Data = match[2];
+  const buffer = Buffer.from(base64Data, 'base64');
+
+  if (buffer.length < 32 || buffer.length > MAX_LICENSE_FILE_BYTES) {
+    return {
+      ok: false,
+      error: 'License document must be between 32 bytes and 4 MB.',
+    };
+  }
+
+  // Magic-byte verification to prevent disguised executables
+  let ext = '';
+  if (mimeType === 'image/jpeg' && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    ext = 'jpg';
+  } else if (
+    mimeType === 'image/png' &&
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47
+  ) {
+    ext = 'png';
+  } else if (
+    mimeType === 'image/webp' &&
+    buffer.subarray(0, 4).toString('ascii') === 'RIFF' &&
+    buffer.subarray(8, 12).toString('ascii') === 'WEBP'
+  ) {
+    ext = 'webp';
+  } else if (mimeType === 'application/pdf' && buffer.subarray(0, 5).toString('ascii') === '%PDF-') {
+    ext = 'pdf';
+  } else {
+    return {
+      ok: false,
+      error: 'Uploaded file signature does not match JPG, PNG, WEBP, or PDF.',
+    };
+  }
+
+  const baseName = path
+    .basename(rawFileName || `license.${ext}`)
+    .replace(/[^a-zA-Z0-9._-]/g, '_')
+    .slice(0, 80);
+
+  return {
+    ok: true,
+    buffer,
+    mimeType,
+    ext,
+    safeFileName: baseName || `license.${ext}`,
+  };
 }
 
 function splitPhoneParts(countryCodeInput: string, localPhoneInput: string, fullPhoneInput: string) {
@@ -346,9 +507,15 @@ function getEmailConfig() {
   };
 }
 
+function getConfiguredAdminPasscode(): string {
+  return (process.env.ADMIN_PASSCODE || process.env.SUPPORT_TEAM_PASSCODE || '').trim();
+}
+
 function isPhoneSupportAdmin(phoneE164: string): boolean {
-  const raw = (process.env.SUPPORT_ADMIN_PHONES || '').trim();
-  if (!raw) return false;
+  const raw = [process.env.ADMIN_PHONES || '', process.env.SUPPORT_ADMIN_PHONES || '']
+    .filter(Boolean)
+    .join(',');
+  if (!raw.trim()) return false;
   const list = raw
     .split(',')
     .map((item) => normalizePhoneE164(item.trim()))
@@ -498,11 +665,11 @@ function getAuthContext(req: Request): AuthedContext {
 
   const cookies = parseCookies(req);
   const supportTeamCookie = cookies[SUPPORT_TEAM_COOKIE_NAME];
-  const passcode = (process.env.SUPPORT_TEAM_PASSCODE || '').trim();
+  const passcode = getConfiguredAdminPasscode();
   const hasPasscodeCookie =
     Boolean(passcode) &&
     Boolean(supportTeamCookie) &&
-    safeEqualHex(supportTeamCookie, hmacDigest(`support-team:${passcode}`));
+    safeEqualHex(supportTeamCookie, hmacDigest(`support-team:${passcode}`, store));
 
   const isSupportTeam = Boolean(session?.isSupportAdmin || user?.isSupportAdmin || hasPasscodeCookie);
 
@@ -512,7 +679,15 @@ function getAuthContext(req: Request): AuthedContext {
 async function startServer() {
   const app = express();
   app.set('trust proxy', 1);
-  app.use(express.json({ limit: '64kb' }));
+
+  const defaultJsonParser = express.json({ limit: '128kb' });
+  const verificationJsonParser = express.json({ limit: '6mb' });
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (req.path === '/api/doctor/verification') {
+      return verificationJsonParser(req, res, next);
+    }
+    return defaultJsonParser(req, res, next);
+  });
 
   app.use((_req: Request, res: Response, next: NextFunction) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -527,6 +702,7 @@ async function startServer() {
   app.get('/api/config/status', (_req: Request, res: Response) => {
     const sms = getSmsConfig();
     const email = getEmailConfig();
+    const adminPassConfigured = Boolean(getConfiguredAdminPasscode());
     res.json({
       smsConfigured: sms.configured,
       smsProvider: sms.mode,
@@ -535,7 +711,8 @@ async function startServer() {
       supportEmailPlaceholder: email.supportEmailPlaceholder,
       supportEmailPreview: email.supportEmailPreview,
       missingEmailVars: email.missingEmailVars,
-      supportTeamPasscodeConfigured: Boolean((process.env.SUPPORT_TEAM_PASSCODE || '').trim()),
+      supportTeamPasscodeConfigured: adminPassConfigured,
+      adminConfigured: adminPassConfigured,
     });
   });
 
@@ -650,6 +827,7 @@ async function startServer() {
           villageName: '',
           email: '',
           accountRole: 'patient',
+          doctorVerificationStatus: 'none',
           isSupportAdmin,
           profileCompleted: false,
           createdAt: nowIso,
@@ -705,11 +883,15 @@ async function startServer() {
     const email = String(req.body?.email || '').trim().toLowerCase();
     const password = String(req.body?.password || '');
     const confirmPassword = String(req.body?.confirmPassword || '');
+    const rawRole = req.body?.accountRole;
     const villageName = String(req.body?.villageName || '').trim();
-    const accountRole = req.body?.accountRole === 'doctor' ? 'doctor' : 'patient';
     const rememberMe = req.body?.rememberMe !== false;
 
     const fieldErrors: Record<string, string> = {};
+
+    if (rawRole !== 'patient' && rawRole !== 'doctor') {
+      fieldErrors.accountRole = 'Please select your account role: Patient or Doctor.';
+    }
 
     if (firstName.length < 2 || firstName.length > 40) {
       fieldErrors.firstName = 'First name must be between 2 and 40 characters.';
@@ -755,6 +937,8 @@ async function startServer() {
       return;
     }
 
+    const accountRole: 'patient' | 'doctor' = rawRole === 'doctor' ? 'doctor' : 'patient';
+
     const store = ensureStore();
     const existingByEmail = store.users.find((u) => u.email.toLowerCase() === email);
     if (existingByEmail) {
@@ -793,6 +977,7 @@ async function startServer() {
       email,
       passwordHash: hashPassword(password),
       accountRole,
+      doctorVerificationStatus: accountRole === 'doctor' ? 'unverified' : 'none',
       isSupportAdmin,
       profileCompleted: true,
       createdAt: nowIso,
@@ -914,21 +1099,40 @@ async function startServer() {
     });
   });
 
-  // 4. Current Authenticated User
+  // 4. Current Authenticated User & Server-Enforced Effective Role
   app.get('/api/auth/me', (req: Request, res: Response) => {
     const ctx = getAuthContext(req);
+    const doctorVerified = Boolean(
+      ctx.user && ctx.user.accountRole === 'doctor' && ctx.user.doctorVerificationStatus === 'approved'
+    );
+    const effectiveRole = doctorVerified ? 'doctor' : 'patient';
     res.json({
       authenticated: Boolean(ctx.user),
       user: ctx.user ? sanitizeUser(ctx.user) : null,
+      effectiveRole,
+      doctorVerified,
       isSupportTeam: ctx.isSupportTeam,
     });
   });
 
-  // 5. Update Authenticated User Profile ("Мой профиль")
+  // 5. Update Authenticated User Profile ("Мой профиль") — NEVER allows role escalation
   const handleUpdateProfile = (req: Request, res: Response) => {
     const ctx = getAuthContext(req);
     if (!ctx.user) {
       res.status(401).json({ ok: false, error: 'Authentication required.' });
+      return;
+    }
+
+    if (
+      ctx.user.profileCompleted &&
+      req.body?.accountRole !== undefined &&
+      req.body.accountRole !== ctx.user.accountRole
+    ) {
+      res.status(403).json({
+        ok: false,
+        code: 'ROLE_CHANGE_FORBIDDEN',
+        error: 'Account role cannot be changed after registration.',
+      });
       return;
     }
 
@@ -945,8 +1149,10 @@ async function startServer() {
     const phoneInput = String(req.body?.phone || ctx.user.phoneE164 || '').trim();
     const email = String(req.body?.email ?? ctx.user.email ?? '').trim().toLowerCase();
     const villageName = String(req.body?.villageName ?? ctx.user.villageName ?? '').trim();
-    const accountRole =
-      req.body?.accountRole === 'doctor'
+
+    const accountRole = ctx.user.profileCompleted
+      ? ctx.user.accountRole
+      : req.body?.accountRole === 'doctor'
         ? 'doctor'
         : req.body?.accountRole === 'patient'
           ? 'patient'
@@ -1027,6 +1233,13 @@ async function startServer() {
       return;
     }
 
+    const nextVerificationStatus =
+      accountRole === 'doctor'
+        ? store.users[idx].doctorVerificationStatus === 'none'
+          ? 'unverified'
+          : store.users[idx].doctorVerificationStatus
+        : 'none';
+
     store.users[idx] = {
       ...store.users[idx],
       firstName,
@@ -1039,6 +1252,7 @@ async function startServer() {
       villageName,
       email,
       accountRole,
+      doctorVerificationStatus: nextVerificationStatus,
       profileCompleted: true,
       updatedAt: new Date().toISOString(),
     };
@@ -1049,6 +1263,224 @@ async function startServer() {
 
   app.post('/api/auth/complete-profile', handleUpdateProfile);
   app.patch('/api/auth/profile', handleUpdateProfile);
+
+  // 5b. Server-Side Doctor Cabinet Access Gate & License Verification Endpoints
+  app.get('/api/doctor/access', (req: Request, res: Response) => {
+    const ctx = getAuthContext(req);
+    if (!ctx.user) {
+      res.status(401).json({
+        ok: false,
+        accessGranted: false,
+        code: 'AUTH_REQUIRED',
+        error: 'Authentication is required to access the Doctor Cabinet.',
+      });
+      return;
+    }
+
+    if (ctx.user.accountRole !== 'doctor') {
+      res.status(403).json({
+        ok: false,
+        accessGranted: false,
+        code: 'DOCTOR_ROLE_REQUIRED',
+        error: 'Access denied. Only registered medical specialists have access to the Doctor Cabinet.',
+      });
+      return;
+    }
+
+    if (ctx.user.doctorVerificationStatus !== 'approved') {
+      res.status(403).json({
+        ok: false,
+        accessGranted: false,
+        code: 'DOCTOR_VERIFICATION_REQUIRED',
+        verificationStatus: ctx.user.doctorVerificationStatus,
+        rejectionReason: ctx.user.doctorRejectionReason,
+        error: 'Medical license verification by an administrator is required before accessing Doctor Cabinet.',
+      });
+      return;
+    }
+
+    res.json({
+      ok: true,
+      accessGranted: true,
+      verificationStatus: 'approved',
+    });
+  });
+
+  app.get('/api/doctor/verification', (req: Request, res: Response) => {
+    const ctx = getAuthContext(req);
+    if (!ctx.user) {
+      res.status(401).json({ ok: false, error: 'Authentication required.' });
+      return;
+    }
+    if (ctx.user.accountRole !== 'doctor') {
+      res.status(403).json({
+        ok: false,
+        code: 'DOCTOR_ROLE_REQUIRED',
+        error: 'Only accounts registered as Doctor can view or submit license verification.',
+      });
+      return;
+    }
+
+    const store = ensureStore();
+    const latest = store.doctorVerifications.find((v) => v.userId === ctx.user!.id) || null;
+    res.json({
+      ok: true,
+      verificationStatus: ctx.user.doctorVerificationStatus,
+      rejectionReason: ctx.user.doctorRejectionReason,
+      verification: latest ? sanitizeVerificationRecord(latest, ctx.user) : null,
+    });
+  });
+
+  app.get('/api/doctor/verification/document', (req: Request, res: Response) => {
+    const ctx = getAuthContext(req);
+    if (!ctx.user) {
+      res.status(401).json({ ok: false, error: 'Authentication required.' });
+      return;
+    }
+    if (ctx.user.accountRole !== 'doctor') {
+      res.status(403).json({ ok: false, error: 'Forbidden.' });
+      return;
+    }
+
+    const store = ensureStore();
+    const record = store.doctorVerifications.find((v) => v.userId === ctx.user!.id);
+    if (!record) {
+      res.status(404).json({ ok: false, error: 'No license document found.' });
+      return;
+    }
+
+    const safeKey = path.basename(record.storedFileKey);
+    const fullPath = path.join(LICENSES_DIR, safeKey);
+    if (!fs.existsSync(fullPath)) {
+      res.status(404).json({ ok: false, error: 'Document file missing on server.' });
+      return;
+    }
+
+    res.setHeader('Content-Type', record.mimeType);
+    res.setHeader('Content-Disposition', `inline; filename="${record.fileName}"`);
+    res.sendFile(fullPath);
+  });
+
+  app.post('/api/doctor/verification', (req: Request, res: Response) => {
+    const ctx = getAuthContext(req);
+    if (!ctx.user) {
+      res.status(401).json({ ok: false, error: 'Authentication required.' });
+      return;
+    }
+    if (ctx.user.accountRole !== 'doctor') {
+      res.status(403).json({
+        ok: false,
+        code: 'DOCTOR_ROLE_REQUIRED',
+        error: 'Patients cannot submit doctor verification or escalate to Doctor role.',
+      });
+      return;
+    }
+
+    const fullName = String(req.body?.fullName || '').trim();
+    const specialty = String(req.body?.specialty || '').trim();
+    const institutionName = String(req.body?.institutionName || '').trim();
+    const licenseNumber = String(req.body?.licenseNumber || '').trim();
+    const issuingRegion = String(req.body?.issuingRegion || '').trim();
+    const issueDate = String(req.body?.issueDate || '').trim();
+    const documentDataUrl = String(req.body?.documentDataUrl || '');
+    const fileName = String(req.body?.fileName || 'license');
+
+    const fieldErrors: Record<string, string> = {};
+    if (fullName.length < 3 || fullName.length > 100) {
+      fieldErrors.fullName = 'Enter your full name as shown on your medical license.';
+    }
+    if (specialty.length < 2 || specialty.length > 80) {
+      fieldErrors.specialty = 'Select or enter your medical specialty.';
+    }
+    if (institutionName.length < 3 || institutionName.length > 140) {
+      fieldErrors.institutionName = 'Enter the name of your medical institution.';
+    }
+    if (licenseNumber.length < 4 || licenseNumber.length > 60) {
+      fieldErrors.licenseNumber = 'Enter a valid medical license number.';
+    }
+    if (issuingRegion.length < 2 || issuingRegion.length > 100) {
+      fieldErrors.issuingRegion = 'Enter the issuing region or authority.';
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(issueDate) || Number.isNaN(Date.parse(issueDate))) {
+      fieldErrors.issueDate = 'Enter a valid license issue date (YYYY-MM-DD).';
+    } else if (Date.parse(issueDate) > Date.now() + 86_400_000) {
+      fieldErrors.issueDate = 'License issue date cannot be in the future.';
+    }
+
+    const parsedDoc = parseAndValidateLicenseUpload(documentDataUrl, fileName);
+    if (!parsedDoc.ok) {
+      fieldErrors.document = parsedDoc.error;
+    }
+
+    if (Object.keys(fieldErrors).length > 0 || !parsedDoc.ok) {
+      res.status(400).json({
+        ok: false,
+        code: 'VALIDATION_ERROR',
+        error: Object.values(fieldErrors)[0],
+        fieldErrors,
+      });
+      return;
+    }
+
+    const store = ensureStore();
+    const userIdx = store.users.findIndex((u) => u.id === ctx.user!.id);
+    if (userIdx === -1) {
+      res.status(404).json({ ok: false, error: 'User account not found.' });
+      return;
+    }
+
+    // Remove previous uploaded file if resubmitting
+    const prevRecordIdx = store.doctorVerifications.findIndex((v) => v.userId === ctx.user!.id);
+    if (prevRecordIdx !== -1) {
+      const oldKey = path.basename(store.doctorVerifications[prevRecordIdx].storedFileKey);
+      const oldPath = path.join(LICENSES_DIR, oldKey);
+      if (fs.existsSync(oldPath)) {
+        try {
+          fs.unlinkSync(oldPath);
+        } catch {
+          // Non-fatal
+        }
+      }
+      store.doctorVerifications.splice(prevRecordIdx, 1);
+    }
+
+    const storedFileKey = `LIC-${crypto.randomUUID()}.${parsedDoc.ext}`;
+    fs.writeFileSync(path.join(LICENSES_DIR, storedFileKey), parsedDoc.buffer, { mode: 0o600 });
+
+    const nowIso = new Date().toISOString();
+    const newRecord: StoredDoctorVerification = {
+      id: `VER-${crypto.randomUUID()}`,
+      userId: ctx.user.id,
+      fullName,
+      specialty,
+      institutionName,
+      licenseNumber,
+      issuingRegion,
+      issueDate,
+      fileName: parsedDoc.safeFileName,
+      storedFileKey,
+      mimeType: parsedDoc.mimeType,
+      fileSize: parsedDoc.buffer.length,
+      status: 'pending',
+      submittedAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    store.doctorVerifications.unshift(newRecord);
+    store.users[userIdx] = {
+      ...store.users[userIdx],
+      doctorVerificationStatus: 'pending',
+      doctorRejectionReason: undefined,
+      updatedAt: nowIso,
+    };
+    saveStore(store);
+
+    res.status(201).json({
+      ok: true,
+      user: sanitizeUser(store.users[userIdx]),
+      verification: sanitizeVerificationRecord(newRecord, store.users[userIdx]),
+    });
+  });
 
   // 6. Logout
   app.post('/api/auth/logout', (req: Request, res: Response) => {
@@ -1215,30 +1647,36 @@ async function startServer() {
     }
   });
 
-  // 8. Unlock Support Team Review Console
-  app.post('/api/support/team-auth', (req: Request, res: Response) => {
-    const passcode = (process.env.SUPPORT_TEAM_PASSCODE || '').trim();
+  // 8. Unlock Admin & Support Team Review Console
+  const handleAdminAuth = (req: Request, res: Response) => {
+    const passcode = getConfiguredAdminPasscode();
     if (!passcode) {
       res.status(503).json({
         ok: false,
         configured: false,
-        error: 'SUPPORT_TEAM_PASSCODE is not configured on the server.',
+        error: 'ADMIN_PASSCODE (or SUPPORT_TEAM_PASSCODE) is not configured on the server.',
       });
       return;
     }
 
     const supplied = String(req.body?.passcode || '').trim();
     if (!supplied || !safeEqualHex(sha256(passcode), sha256(supplied))) {
-      res.status(401).json({ ok: false, error: 'Invalid support team passcode.' });
+      res.status(401).json({ ok: false, error: 'Invalid administrator passcode.' });
       return;
     }
 
+    const store = ensureStore();
     const ctx = getAuthContext(req);
     const isSecure = req.secure || req.headers['x-forwarded-proto'] === 'https';
-    setCookieHeader(res, SUPPORT_TEAM_COOKIE_NAME, hmacDigest(`support-team:${passcode}`), 14400 * 1000, isSecure);
+    setCookieHeader(
+      res,
+      SUPPORT_TEAM_COOKIE_NAME,
+      hmacDigest(`support-team:${passcode}`, store),
+      14400 * 1000,
+      isSecure
+    );
 
     if (ctx.session) {
-      const store = ensureStore();
       const s = store.sessions.find((item) => item.tokenHash === ctx.session!.tokenHash);
       if (s) {
         s.isSupportAdmin = true;
@@ -1247,6 +1685,122 @@ async function startServer() {
     }
 
     res.json({ ok: true, isSupportTeam: true });
+  };
+
+  app.post('/api/support/team-auth', handleAdminAuth);
+  app.post('/api/admin/auth', handleAdminAuth);
+
+  // 8b. Admin Doctor License Verification Review (Authorized Admins ONLY)
+  app.get('/api/admin/doctor-verifications', (req: Request, res: Response) => {
+    const ctx = getAuthContext(req);
+    if (!ctx.isSupportTeam) {
+      res.status(403).json({
+        ok: false,
+        error: 'Administrator authorization is required to view medical license applications.',
+      });
+      return;
+    }
+
+    const store = ensureStore();
+    const list = store.doctorVerifications.map((rec) => {
+      const owner = store.users.find((u) => u.id === rec.userId);
+      return sanitizeVerificationRecord(rec, owner);
+    });
+    res.json({ ok: true, verifications: list });
+  });
+
+  app.get('/api/admin/doctor-verifications/:id/document', (req: Request, res: Response) => {
+    const ctx = getAuthContext(req);
+    if (!ctx.isSupportTeam) {
+      res.status(403).json({
+        ok: false,
+        error: 'Administrator authorization is required to view uploaded license documents.',
+      });
+      return;
+    }
+
+    const store = ensureStore();
+    const rec = store.doctorVerifications.find((v) => v.id === req.params.id);
+    if (!rec) {
+      res.status(404).json({ ok: false, error: 'Verification application not found.' });
+      return;
+    }
+
+    const safeKey = path.basename(rec.storedFileKey);
+    const fullPath = path.join(LICENSES_DIR, safeKey);
+    if (!fs.existsSync(fullPath)) {
+      res.status(404).json({ ok: false, error: 'Uploaded license document not found on server.' });
+      return;
+    }
+
+    res.setHeader('Content-Type', rec.mimeType);
+    res.setHeader('Content-Disposition', `inline; filename="${rec.fileName}"`);
+    res.sendFile(fullPath);
+  });
+
+  app.patch('/api/admin/doctor-verifications/:id/decision', (req: Request, res: Response) => {
+    const ctx = getAuthContext(req);
+    if (!ctx.isSupportTeam) {
+      res.status(403).json({
+        ok: false,
+        error: 'Only authorized administrators can approve or reject doctor verification.',
+      });
+      return;
+    }
+
+    const decision = req.body?.decision;
+    const rejectionReason = String(req.body?.rejectionReason || '').trim();
+
+    if (decision !== 'approved' && decision !== 'rejected') {
+      res.status(400).json({ ok: false, error: 'Decision must be "approved" or "rejected".' });
+      return;
+    }
+
+    if (decision === 'rejected' && rejectionReason.length < 5) {
+      res.status(400).json({
+        ok: false,
+        error: 'Please enter a clear rejection reason (at least 5 characters).',
+      });
+      return;
+    }
+
+    const store = ensureStore();
+    const recIdx = store.doctorVerifications.findIndex((v) => v.id === req.params.id);
+    if (recIdx === -1) {
+      res.status(404).json({ ok: false, error: 'Verification application not found.' });
+      return;
+    }
+
+    const nowIso = new Date().toISOString();
+    const reviewer = ctx.user?.email || ctx.user?.phoneE164 || 'Administrator';
+    const currentRec = store.doctorVerifications[recIdx];
+    const updatedRec: StoredDoctorVerification = {
+      ...currentRec,
+      status: decision,
+      rejectionReason: decision === 'rejected' ? rejectionReason : undefined,
+      reviewedBy: reviewer,
+      reviewedAt: nowIso,
+      updatedAt: nowIso,
+    };
+    store.doctorVerifications[recIdx] = updatedRec;
+
+    const userIdx = store.users.findIndex((u) => u.id === currentRec.userId);
+    if (userIdx !== -1) {
+      store.users[userIdx] = {
+        ...store.users[userIdx],
+        doctorVerificationStatus: decision,
+        doctorRejectionReason: decision === 'rejected' ? rejectionReason : undefined,
+        doctorVerifiedAt: decision === 'approved' ? nowIso : undefined,
+        updatedAt: nowIso,
+      };
+    }
+
+    saveStore(store);
+    const owner = userIdx !== -1 ? store.users[userIdx] : undefined;
+    res.json({
+      ok: true,
+      verification: sanitizeVerificationRecord(updatedRec, owner),
+    });
   });
 
   // 9. List Support Tickets (STRICTLY scoped: own tickets OR verified Support Team)

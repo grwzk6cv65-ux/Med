@@ -32,13 +32,13 @@ import {
   Village,
 } from '../types/medradar';
 import { analyzeRapidLabVitals, evaluatePatientRadar } from '../utils/aiRadarEngine';
+import { useAuth } from './AuthContext';
 
 const STORAGE_KEY = 'medradar_demo_state_v2';
 const LEGACY_STORAGE_KEY = 'medradar_demo_state_v1';
 
 interface PersistedState {
   language: Language;
-  role: UserRole;
   activePatientId: string;
   villages: Village[];
   patients: DemoPatient[];
@@ -58,6 +58,12 @@ const DEFAULT_ACCESSIBILITY: AccessibilitySettings = {
   browserNotificationsEnabled: false,
   offlineDemoMode: false,
 };
+
+function stripDemoSuffix(text: string): string {
+  return text
+    .replace(/\s*\((?:ДЕМО|DEMO|ДЕМО-ДАННЫЕ|DEMO DATA|ДЕМО ДЕРЕКТЕР)\)/gi, '')
+    .trim();
+}
 
 function mapLegacyCategory(cat: string): ReminderCategory {
   if (cat === 'appointment' || cat === 'examination' || cat === 'lab_result' || cat === 'follow_up' || cat === 'personal_task') {
@@ -92,9 +98,24 @@ function loadInitialState(): PersistedState {
           })
         );
 
+        const sanitizedNotifications: AppNotification[] = (
+          parsed.notifications ?? INITIAL_NOTIFICATIONS
+        ).map((n) => ({
+          ...n,
+          title: {
+            en: stripDemoSuffix(n.title.en),
+            ru: stripDemoSuffix(n.title.ru),
+            kk: stripDemoSuffix(n.title.kk),
+          },
+          message: {
+            en: stripDemoSuffix(n.message.en),
+            ru: stripDemoSuffix(n.message.ru),
+            kk: stripDemoSuffix(n.message.kk),
+          },
+        }));
+
         return {
           language: parsed.language ?? 'ru',
-          role: parsed.role ?? 'doctor',
           activePatientId: parsed.activePatientId ?? INITIAL_PATIENTS[0].id,
           villages: parsed.villages,
           patients: normalizedPatients,
@@ -102,7 +123,7 @@ function loadInitialState(): PersistedState {
           medMobileSchedule: parsed.medMobileSchedule ?? INITIAL_MEDMOBILE_SCHEDULE,
           referrals: parsed.referrals ?? INITIAL_REFERRALS,
           reminders: normalizedReminders,
-          notifications: parsed.notifications ?? INITIAL_NOTIFICATIONS,
+          notifications: sanitizedNotifications,
           accessibility: { ...DEFAULT_ACCESSIBILITY, ...(parsed.accessibility ?? {}) },
           pendingSync: parsed.pendingSync ?? [],
           lastSyncedAt: parsed.lastSyncedAt ?? '2026-11-19 09:00',
@@ -115,7 +136,6 @@ function loadInitialState(): PersistedState {
 
   return {
     language: 'ru',
-    role: 'doctor',
     activePatientId: INITIAL_PATIENTS[0].id,
     villages: INITIAL_VILLAGES,
     patients: INITIAL_PATIENTS,
@@ -135,7 +155,6 @@ interface MedradarContextValue {
   setLanguage: (lang: Language) => void;
   t: (key: string) => string;
   role: UserRole;
-  setRole: (role: UserRole) => void;
   activeModule: ModuleId;
   setActiveModule: (mod: ModuleId) => void;
   activePatientId: string;
@@ -221,6 +240,7 @@ function nowStamp(): string {
 }
 
 export function MedradarProvider({ children }: { children: React.ReactNode }) {
+  const { effectiveRole } = useAuth();
   const [state, setState] = useState<PersistedState>(loadInitialState);
   const [activeModule, setActiveModule] = useState<ModuleId>('dashboard');
   const [selectedVillageId, setSelectedVillageId] = useState<string | null>('V-03');
@@ -367,7 +387,6 @@ export function MedradarProvider({ children }: { children: React.ReactNode }) {
   const getPatient = (id: string) => state.patients.find((p) => p.id === id);
 
   const setLanguage = (language: Language) => setState((prev) => ({ ...prev, language }));
-  const setRole = (role: UserRole) => setState((prev) => ({ ...prev, role }));
   const setActivePatientId = (activePatientId: string) =>
     setState((prev) => ({ ...prev, activePatientId }));
 
@@ -450,9 +469,9 @@ export function MedradarProvider({ children }: { children: React.ReactNode }) {
       dedupKey: `lab-${record.id}`,
       patientId: patient.id,
       title: {
-        en: 'Rapid Lab Results Recorded (DEMO)',
-        ru: 'Результаты Rapid Lab сохранены (ДЕМО)',
-        kk: 'Rapid Lab нәтижелері сақталды (ДЕМО)',
+        en: 'Rapid Lab Results Recorded',
+        ru: 'Результаты Rapid Lab сохранены',
+        kk: 'Rapid Lab нәтижелері сақталды',
       },
       message: {
         en: `${patient.fullName} · Flags: ${analysis.abnormalFlags.length}`,
@@ -663,9 +682,9 @@ export function MedradarProvider({ children }: { children: React.ReactNode }) {
       dedupKey: `ref-${referral.id}`,
       patientId: patient.id,
       title: {
-        en: 'Appointment Confirmed (DEMO)',
-        ru: 'Запись на приём подтверждена (ДЕМО)',
-        kk: 'Қабылдауға жазылу расталды (ДЕМО)',
+        en: 'Appointment Confirmed',
+        ru: 'Запись на приём подтверждена',
+        kk: 'Қабылдауға жазылу расталды',
       },
       message: {
         en: `${patient.fullName} · ${referral.specialty} on ${referral.scheduledDate} at ${referral.timeSlot}`,
@@ -812,9 +831,9 @@ export function MedradarProvider({ children }: { children: React.ReactNode }) {
       dedupKey: `rem-created-${reminder.id}`,
       patientId: input.patientId,
       title: {
-        en: 'Smart Reminder Scheduled (DEMO)',
-        ru: 'Напоминание создано (ДЕМО)',
-        kk: 'Еске салғыш жасалды (ДЕМО)',
+        en: 'Smart Reminder Scheduled',
+        ru: 'Напоминание создано',
+        kk: 'Еске салғыш жасалды',
       },
       message: {
         en: `${patient?.fullName ?? input.patientId} · ${input.title} (${input.dueDate}${input.dueTime ? ` ${input.dueTime}` : ''})`,
@@ -830,11 +849,11 @@ export function MedradarProvider({ children }: { children: React.ReactNode }) {
 
   // Patient privacy filter: in Patient View, only expose notifications belonging to the active patient or general system alerts
   const visibleNotifications = useMemo(() => {
-    if (state.role === 'doctor') return state.notifications;
+    if (effectiveRole === 'doctor') return state.notifications;
     return state.notifications.filter(
       (n) => !n.patientId || n.patientId === state.activePatientId
     );
-  }, [state.notifications, state.role, state.activePatientId]);
+  }, [state.notifications, effectiveRole, state.activePatientId]);
 
   const unreadNotificationCount = useMemo(
     () => visibleNotifications.filter((n) => !n.read).length,
@@ -885,7 +904,6 @@ export function MedradarProvider({ children }: { children: React.ReactNode }) {
     }
     setState({
       language: state.language,
-      role: state.role,
       activePatientId: INITIAL_PATIENTS[0].id,
       villages: INITIAL_VILLAGES,
       patients: INITIAL_PATIENTS,
@@ -906,8 +924,7 @@ export function MedradarProvider({ children }: { children: React.ReactNode }) {
         language: state.language,
         setLanguage,
         t,
-        role: state.role,
-        setRole,
+        role: effectiveRole,
         activeModule,
         setActiveModule,
         activePatientId: state.activePatientId,

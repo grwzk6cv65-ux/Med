@@ -2,22 +2,33 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock,
+  Eye,
   KeyRound,
   LifeBuoy,
   Lock,
   Mail,
   Send,
   ShieldCheck,
+  Stethoscope,
+  XCircle,
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useMedradar } from '../context/MedradarContext';
 import {
+  decideDoctorVerification,
+  fetchAdminDoctorVerifications,
+  fetchProtectedDocumentBlobUrl,
   fetchSupportTickets,
   submitSupportEmail,
   updateSupportTicketStatus,
 } from '../services/api';
-import { SupportTicket, SupportTicketStatus } from '../types/medradar';
+import {
+  DoctorVerificationRecord,
+  SupportTicket,
+  SupportTicketStatus,
+} from '../types/medradar';
+import { DoctorStatusBadge } from './DoctorVerificationModal';
 
 export function SupportRequestsView() {
   const { t, language, activeModule } = useMedradar();
@@ -45,10 +56,28 @@ export function SupportRequestsView() {
   const [passcode, setPasscode] = useState('');
   const [unlockError, setUnlockError] = useState<string | null>(null);
 
+  // Admin Doctor License Verifications
+  const [doctorApps, setDoctorApps] = useState<DoctorVerificationRecord[]>([]);
+  const [loadingApps, setLoadingApps] = useState(false);
+  const [rejectionReasons, setRejectionReasons] = useState<Record<string, string>>({});
+  const [decisionBusyId, setDecisionBusyId] = useState<string | null>(null);
+  const [decisionFeedback, setDecisionFeedback] = useState<string | null>(null);
+  const [docPreview, setDocPreview] = useState<{
+    id: string;
+    mimeType: string;
+    blobUrl: string;
+  } | null>(null);
+
   useEffect(() => {
     if (user?.email && !replyEmail) setReplyEmail(user.email);
     if (user?.phoneE164 && !phoneNumber) setPhoneNumber(user.phoneE164);
   }, [user, replyEmail, phoneNumber]);
+
+  useEffect(() => {
+    return () => {
+      if (docPreview?.blobUrl) URL.revokeObjectURL(docPreview.blobUrl);
+    };
+  }, [docPreview]);
 
   const loadTickets = useCallback(async () => {
     if (tab === 'mine' && !isAuthenticated) {
@@ -57,6 +86,7 @@ export function SupportRequestsView() {
     }
     if (tab === 'team' && !isSupportTeam) {
       setTickets([]);
+      setDoctorApps([]);
       return;
     }
 
@@ -72,6 +102,22 @@ export function SupportRequestsView() {
       setTickets([]);
     } finally {
       setLoadingTickets(false);
+    }
+
+    if (tab === 'team' && isSupportTeam) {
+      setLoadingApps(true);
+      try {
+        const res = await fetchAdminDoctorVerifications();
+        if (res.status >= 200 && res.status < 300 && res.data.ok && res.data.verifications) {
+          setDoctorApps(res.data.verifications);
+        } else {
+          setDoctorApps([]);
+        }
+      } catch {
+        setDoctorApps([]);
+      } finally {
+        setLoadingApps(false);
+      }
     }
   }, [tab, isAuthenticated, isSupportTeam]);
 
@@ -163,6 +209,42 @@ export function SupportRequestsView() {
     const { status, data } = await updateSupportTicketStatus(ticketId, nextStatus);
     if (status >= 200 && status < 300 && data.ok && data.ticket) {
       setTickets((prev) => prev.map((tk) => (tk.id === ticketId ? data.ticket! : tk)));
+    }
+  };
+
+  const handleInspectDocument = async (app: DoctorVerificationRecord) => {
+    const res = await fetchProtectedDocumentBlobUrl(
+      `/api/admin/doctor-verifications/${encodeURIComponent(app.id)}/document`
+    );
+    if (res.ok && res.objectUrl) {
+      const nextUrl = res.objectUrl;
+      setDocPreview((prev) => {
+        if (prev?.blobUrl) URL.revokeObjectURL(prev.blobUrl);
+        return { id: app.id, mimeType: res.mimeType || app.mimeType, blobUrl: nextUrl };
+      });
+    } else if (res.error) {
+      setDecisionFeedback(res.error);
+    }
+  };
+
+  const handleDoctorDecision = async (appId: string, decision: 'approved' | 'rejected') => {
+    setDecisionFeedback(null);
+    const reason = (rejectionReasons[appId] || '').trim();
+    if (decision === 'rejected' && reason.length < 3) {
+      setDecisionFeedback(t('admin_rejection_ph'));
+      return;
+    }
+
+    setDecisionBusyId(appId);
+    try {
+      const { status, data } = await decideDoctorVerification(appId, decision, reason);
+      if (status >= 200 && status < 300 && data.ok && data.verification) {
+        setDoctorApps((prev) => prev.map((a) => (a.id === appId ? data.verification! : a)));
+      } else {
+        setDecisionFeedback(data.error || 'Could not update application.');
+      }
+    } finally {
+      setDecisionBusyId(null);
     }
   };
 
@@ -449,63 +531,209 @@ export function SupportRequestsView() {
                 </button>
               </div>
             </form>
-          ) : loadingTickets ? (
-            <div className="py-8 text-center text-xs text-zinc-500">Loading tickets...</div>
-          ) : tickets.length === 0 ? (
-            <div className="py-8 text-center text-xs text-zinc-500">{t('support_empty_mine')}</div>
           ) : (
-            <div className="divide-y divide-zinc-200">
-              {tickets.map((tk) => (
-                <div key={tk.id} className="py-3.5 space-y-2">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-mono text-xs font-bold text-zinc-950">
-                        {tk.ticketNumber}
-                      </span>
-                      {statusBadge(tk.status)}
-                      <span
-                        className={`px-2 py-0.5 text-[10px] font-semibold rounded border ${
-                          tk.emailDelivery.sent
-                            ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                            : 'bg-amber-50 border-amber-200 text-amber-800'
-                        }`}
-                      >
-                        {tk.emailDelivery.sent
-                          ? t('support_email_sent_badge')
-                          : t('support_email_not_sent_badge')}
-                      </span>
-                    </div>
-                    <span className="font-mono text-[11px] text-zinc-500">
-                      {tk.createdAt.slice(0, 16).replace('T', ' ')}
+            <div className="space-y-6">
+              {tab === 'team' && (
+                <div className="space-y-3 pb-4 border-b border-zinc-200">
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-sm font-bold text-zinc-950 flex items-center gap-2">
+                      <Stethoscope className="w-4 h-4 text-emerald-600" />
+                      <span>{t('admin_verif_section_title')}</span>
+                    </h3>
+                    <span className="text-[11px] font-mono text-zinc-500">
+                      {doctorApps.length}
                     </span>
                   </div>
 
-                  <div className="text-xs font-semibold text-zinc-950">{tk.subject}</div>
-                  <p className="text-xs text-zinc-700 leading-relaxed whitespace-pre-line">
-                    {tk.message}
-                  </p>
-
-                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-zinc-500">
-                    <div>
-                      {tk.pageFeature} · {tk.submittedByName} · {tk.replyEmail || tk.phoneNumber}
+                  {decisionFeedback && (
+                    <div className="p-2.5 bg-red-50 border border-red-200 rounded-lg text-xs text-red-900">
+                      {decisionFeedback}
                     </div>
-                    {tab === 'team' && (
-                      <select
-                        value={tk.status}
-                        onChange={(e) =>
-                          handleStatusChange(tk.id, e.target.value as SupportTicketStatus)
-                        }
-                        aria-label={`Update status for ${tk.ticketNumber}`}
-                        className="h-8 px-2 text-xs font-medium bg-zinc-50 border border-zinc-200 rounded-md text-zinc-950"
-                      >
-                        <option value="New">{t('support_status_new')}</option>
-                        <option value="In Progress">{t('support_status_in_progress')}</option>
-                        <option value="Resolved">{t('support_status_resolved')}</option>
-                      </select>
-                    )}
-                  </div>
+                  )}
+
+                  {loadingApps ? (
+                    <div className="py-4 text-xs text-zinc-500">Loading applications...</div>
+                  ) : doctorApps.length === 0 ? (
+                    <div className="p-4 bg-zinc-50 border border-zinc-200 rounded-xl text-xs text-zinc-500">
+                      {t('admin_no_applications')}
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {doctorApps.map((app) => (
+                        <div
+                          key={app.id}
+                          className="p-4 bg-zinc-50 border border-zinc-200 rounded-xl space-y-3 text-xs"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <div className="font-bold text-zinc-950 text-sm">{app.fullName}</div>
+                              <div className="text-zinc-600">
+                                {app.specialty} · {app.institutionName}
+                              </div>
+                            </div>
+                            <DoctorStatusBadge status={app.status} />
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] text-zinc-700 bg-white border border-zinc-200 rounded-lg p-2.5">
+                            <div>
+                              <span className="text-zinc-500">{t('doc_field_license_number')}: </span>
+                              <span className="font-mono font-semibold text-zinc-950">
+                                {app.licenseNumber}
+                              </span>
+                            </div>
+                            <div>
+                              <span className="text-zinc-500">{t('doc_field_region')}: </span>
+                              <span className="font-semibold text-zinc-950">{app.issuingRegion}</span>
+                            </div>
+                            <div>
+                              <span className="text-zinc-500">{t('doc_field_issue_date')}: </span>
+                              <span className="font-mono font-semibold text-zinc-950">
+                                {app.issueDate}
+                              </span>
+                            </div>
+                            <div className="sm:col-span-3 text-zinc-500 font-mono">
+                              {app.userEmail || app.userPhone}
+                            </div>
+                          </div>
+
+                          {app.rejectionReason && (
+                            <div className="p-2.5 bg-red-50 border border-red-200 rounded-lg text-[11px] text-red-900">
+                              <strong>{t('doc_rejection_reason')}:</strong> {app.rejectionReason}
+                            </div>
+                          )}
+
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => void handleInspectDocument(app)}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-semibold bg-white hover:bg-zinc-100 border border-zinc-300 text-zinc-900 rounded-lg"
+                            >
+                              <Eye className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>{t('doc_view_uploaded_doc')}</span>
+                            </button>
+
+                            {app.status !== 'approved' && (
+                              <button
+                                type="button"
+                                disabled={decisionBusyId === app.id}
+                                onClick={() => void handleDoctorDecision(app.id, 'approved')}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-bold bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg disabled:opacity-50"
+                              >
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                <span>{t('admin_approve_btn')}</span>
+                              </button>
+                            )}
+                          </div>
+
+                          {app.status !== 'approved' && (
+                            <div className="flex flex-col sm:flex-row gap-2">
+                              <input
+                                type="text"
+                                value={rejectionReasons[app.id] ?? ''}
+                                onChange={(e) =>
+                                  setRejectionReasons((prev) => ({
+                                    ...prev,
+                                    [app.id]: e.target.value,
+                                  }))
+                                }
+                                placeholder={t('admin_rejection_ph')}
+                                className="flex-1 h-8 px-2.5 text-[11px] bg-white border border-zinc-200 rounded-lg"
+                              />
+                              <button
+                                type="button"
+                                disabled={decisionBusyId === app.id}
+                                onClick={() => void handleDoctorDecision(app.id, 'rejected')}
+                                className="inline-flex items-center justify-center gap-1 px-3 h-8 text-[11px] font-semibold bg-red-600 hover:bg-red-500 text-white rounded-lg disabled:opacity-50 whitespace-nowrap"
+                              >
+                                <XCircle className="w-3.5 h-3.5" />
+                                <span>{t('admin_reject_btn')}</span>
+                              </button>
+                            </div>
+                          )}
+
+                          {docPreview?.id === app.id && (
+                            <div className="p-2 bg-white border border-zinc-200 rounded-lg">
+                              {docPreview.mimeType === 'application/pdf' ? (
+                                <iframe
+                                  src={docPreview.blobUrl}
+                                  title={`License ${app.licenseNumber}`}
+                                  className="w-full h-72 rounded bg-white"
+                                />
+                              ) : (
+                                <img
+                                  src={docPreview.blobUrl}
+                                  alt={`License ${app.licenseNumber}`}
+                                  className="max-h-72 mx-auto rounded object-contain"
+                                />
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              ))}
+              )}
+
+              {loadingTickets ? (
+                <div className="py-8 text-center text-xs text-zinc-500">Loading tickets...</div>
+              ) : tickets.length === 0 ? (
+                <div className="py-8 text-center text-xs text-zinc-500">{t('support_empty_mine')}</div>
+              ) : (
+                <div className="divide-y divide-zinc-200">
+                  {tickets.map((tk) => (
+                    <div key={tk.id} className="py-3.5 space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-mono text-xs font-bold text-zinc-950">
+                            {tk.ticketNumber}
+                          </span>
+                          {statusBadge(tk.status)}
+                          <span
+                            className={`px-2 py-0.5 text-[10px] font-semibold rounded border ${
+                              tk.emailDelivery.sent
+                                ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                                : 'bg-amber-50 border-amber-200 text-amber-800'
+                            }`}
+                          >
+                            {tk.emailDelivery.sent
+                              ? t('support_email_sent_badge')
+                              : t('support_email_not_sent_badge')}
+                          </span>
+                        </div>
+                        <span className="font-mono text-[11px] text-zinc-500">
+                          {tk.createdAt.slice(0, 16).replace('T', ' ')}
+                        </span>
+                      </div>
+
+                      <div className="text-xs font-semibold text-zinc-950">{tk.subject}</div>
+                      <p className="text-xs text-zinc-700 leading-relaxed whitespace-pre-line">
+                        {tk.message}
+                      </p>
+
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-zinc-500">
+                        <div>
+                          {tk.pageFeature} · {tk.submittedByName} · {tk.replyEmail || tk.phoneNumber}
+                        </div>
+                        {tab === 'team' && (
+                          <select
+                            value={tk.status}
+                            onChange={(e) =>
+                              handleStatusChange(tk.id, e.target.value as SupportTicketStatus)
+                            }
+                            aria-label={`Update status for ${tk.ticketNumber}`}
+                            className="h-8 px-2 text-xs font-medium bg-zinc-50 border border-zinc-200 rounded-md text-zinc-950"
+                          >
+                            <option value="New">{t('support_status_new')}</option>
+                            <option value="In Progress">{t('support_status_in_progress')}</option>
+                            <option value="Resolved">{t('support_status_resolved')}</option>
+                          </select>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
