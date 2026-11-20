@@ -15,12 +15,13 @@ import {
   RotateCcw,
   Sparkles,
   Truck,
+  User,
   UserCheck,
   Wifi,
   WifiOff,
   X,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AccessibilitySettingsModal } from './components/AccessibilitySettingsModal';
 import { AiAssistantWidget } from './components/AiAssistantWidget';
 import { AiHealthRadarView } from './components/AiHealthRadarView';
@@ -33,6 +34,7 @@ import { NanoOnboardingModal } from './components/NanoOnboardingModal';
 import { NotificationsPopover } from './components/NotificationsPopover';
 import { PassportReferralsView } from './components/PassportReferralsView';
 import { PhoneAuthModal } from './components/PhoneAuthModal';
+import { ProfileView } from './components/ProfileView';
 import { RapidLabView } from './components/RapidLabView';
 import { RegionalMapView } from './components/RegionalMapView';
 import { SupportRequestsView } from './components/SupportRequestsView';
@@ -50,6 +52,7 @@ const NAV_ITEMS: { id: ModuleId; labelKey: string; icon: typeof LayoutDashboard 
   { id: 'care_loop', labelKey: 'nav_care_loop', icon: RefreshCcw },
   { id: 'analytics', labelKey: 'nav_analytics', icon: BarChart3 },
   { id: 'support', labelKey: 'nav_support', icon: LifeBuoy },
+  { id: 'profile', labelKey: 'nav_profile', icon: User },
 ];
 
 function useNanoOnboarding() {
@@ -88,6 +91,11 @@ function useNanoOnboarding() {
     setIsOnboardingOpen(true);
   };
 
+  const minimizeOnboardingForPreview = () => {
+    setIsOnboardingOpen(false);
+    setShowNanoWelcome(true);
+  };
+
   return {
     isOnboardingOpen,
     onboardingStep,
@@ -95,6 +103,7 @@ function useNanoOnboarding() {
     setOnboardingStep,
     completeOnboarding,
     replayOnboarding,
+    minimizeOnboardingForPreview,
   };
 }
 
@@ -112,6 +121,7 @@ function MedradarShell() {
     pendingSync,
     syncNow,
     highlightedTourTarget,
+    setHighlightedTourTarget,
   } = useMedradar();
   const { user, openAuthModal, logout } = useAuth();
 
@@ -122,7 +132,34 @@ function MedradarShell() {
     setOnboardingStep,
     completeOnboarding,
     replayOnboarding,
+    minimizeOnboardingForPreview,
   } = useNanoOnboarding();
+
+  const highlightTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (highlightTimerRef.current !== null) {
+        window.clearTimeout(highlightTimerRef.current);
+      }
+    };
+  }, []);
+
+  const handlePreviewTourModule = (mod: ModuleId, tourTarget: string) => {
+    if (highlightTimerRef.current !== null) {
+      window.clearTimeout(highlightTimerRef.current);
+    }
+    setActiveModule(mod);
+    minimizeOnboardingForPreview();
+    setHighlightedTourTarget(tourTarget);
+    if (tourTarget === 'nano') {
+      window.dispatchEvent(new CustomEvent('medradar:open-nano'));
+    }
+    highlightTimerRef.current = window.setTimeout(() => {
+      setHighlightedTourTarget(null);
+      highlightTimerRef.current = null;
+    }, 4500);
+  };
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -156,6 +193,8 @@ function MedradarShell() {
         return <AnalyticsView />;
       case 'support':
         return <SupportRequestsView />;
+      case 'profile':
+        return <ProfileView />;
     }
   };
 
@@ -265,7 +304,7 @@ function MedradarShell() {
   return (
     <div className="min-h-screen flex bg-[#F8FAFC] text-zinc-950">
       {/* Desktop Matte Black Sidebar */}
-      <aside className="hidden lg:block w-[248px] shrink-0 sticky top-0 h-screen">
+      <aside className="hidden lg:block w-[248px] shrink-0 sticky top-0 h-screen overflow-y-auto">
         {SidebarContent}
       </aside>
 
@@ -276,7 +315,7 @@ function MedradarShell() {
             className="fixed inset-0 bg-zinc-950/60"
             onClick={() => setMobileMenuOpen(false)}
           />
-          <div className="relative w-64 max-w-xs h-full z-10">{SidebarContent}</div>
+          <div className="relative w-64 max-w-xs h-full z-10 overflow-y-auto">{SidebarContent}</div>
         </div>
       )}
 
@@ -400,17 +439,19 @@ function MedradarShell() {
               <span className="hidden md:inline">{t('settings_btn')}</span>
             </button>
 
-            {/* Phone Account Sign In / Profile / Logout */}
+            {/* Account Profile / Sign In & Register / Logout */}
             {user ? (
               <div className="inline-flex items-center gap-1">
                 <button
                   type="button"
-                  onClick={() => openAuthModal('login')}
+                  onClick={() => setActiveModule('profile')}
                   className="h-9 px-2.5 inline-flex items-center gap-1.5 text-xs font-semibold bg-zinc-950 hover:bg-zinc-800 text-white rounded-lg transition-colors whitespace-nowrap shrink-0"
                 >
                   <UserCheck className="w-3.5 h-3.5 text-emerald-400" aria-hidden="true" />
-                  <span className="hidden sm:inline max-w-[110px] truncate">
-                    {user.fullName || user.phoneE164}
+                  <span className="hidden sm:inline max-w-[120px] truncate">
+                    {user.firstName || user.lastName
+                      ? `${user.firstName} ${user.lastName}`.trim()
+                      : user.fullName || user.phoneE164}
                   </span>
                 </button>
                 <button
@@ -424,14 +465,24 @@ function MedradarShell() {
                 </button>
               </div>
             ) : (
-              <button
-                type="button"
-                onClick={() => openAuthModal('login')}
-                className="h-9 px-3 inline-flex items-center gap-1.5 text-xs font-semibold bg-zinc-950 hover:bg-zinc-800 text-white rounded-lg transition-colors whitespace-nowrap shrink-0"
-              >
-                <Phone className="w-3.5 h-3.5 text-emerald-400" aria-hidden="true" />
-                <span>{t('auth_btn_signin')}</span>
-              </button>
+              <div className="inline-flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => openAuthModal('login')}
+                  className="h-9 px-3 inline-flex items-center gap-1.5 text-xs font-semibold bg-zinc-950 hover:bg-zinc-800 text-white rounded-lg transition-colors whitespace-nowrap shrink-0"
+                >
+                  <Phone className="w-3.5 h-3.5 text-emerald-400" aria-hidden="true" />
+                  <span>{t('auth_btn_signin')}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openAuthModal('register')}
+                  className="hidden sm:inline-flex items-center gap-1.5 h-9 px-3 text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-colors whitespace-nowrap shrink-0"
+                >
+                  <User className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>{t('auth_btn_register')}</span>
+                </button>
+              </div>
             )}
 
             {/* Primary CTA */}
@@ -535,6 +586,7 @@ function MedradarShell() {
         step={onboardingStep}
         onStepChange={setOnboardingStep}
         onComplete={completeOnboarding}
+        onPreviewModule={handlePreviewTourModule}
       />
 
       {/* Accessibility & Settings Modal */}

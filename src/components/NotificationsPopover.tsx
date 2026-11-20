@@ -1,5 +1,5 @@
 import { Bell, BellRing, Check, CheckCheck, X } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMedradar } from '../context/MedradarContext';
 import { pickLocalized } from '../i18n/translations';
 
@@ -20,6 +20,25 @@ export function NotificationsPopover() {
 
   const [open, setOpen] = useState(false);
   const [permMessage, setPermMessage] = useState<string | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('keydown', handleEsc);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('keydown', handleEsc);
+    };
+  }, [open]);
 
   const handleEnableBrowser = async () => {
     const res = await enableBrowserNotifications();
@@ -31,7 +50,7 @@ export function NotificationsPopover() {
   };
 
   return (
-    <div className="relative">
+    <div ref={containerRef} className="relative">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -49,11 +68,6 @@ export function NotificationsPopover() {
 
       {open && (
         <>
-          <div
-            className="fixed inset-0 z-30"
-            onClick={() => setOpen(false)}
-            aria-hidden="true"
-          />
           <div
             role="dialog"
             aria-label={t('notif_title')}

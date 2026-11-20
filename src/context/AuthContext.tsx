@@ -2,14 +2,51 @@ import React, { createContext, useCallback, useContext, useEffect, useState } fr
 import {
   fetchAuthMe,
   fetchConfigStatus,
+  loginWithPassword as apiLoginWithPassword,
   logoutSession,
+  registerAccount as apiRegisterAccount,
   requestPhoneOtp,
   saveUserProfile,
   setStoredSessionToken,
   unlockSupportTeamAccess,
+  updateUserProfile as apiUpdateUserProfile,
   verifyPhoneOtp,
 } from '../services/api';
 import { AuthUser, ServerConfigStatus, UserRole } from '../types/medradar';
+
+interface RegisterParams {
+  firstName: string;
+  lastName: string;
+  age: number;
+  countryCode: string;
+  localPhone: string;
+  phone: string;
+  email: string;
+  password: string;
+  confirmPassword: string;
+  villageName?: string;
+  accountRole?: UserRole;
+  rememberMe?: boolean;
+}
+
+interface UpdateProfileParams {
+  firstName: string;
+  lastName: string;
+  age: number;
+  countryCode: string;
+  localPhone: string;
+  phone: string;
+  email: string;
+  villageName?: string;
+  accountRole?: UserRole;
+}
+
+interface AuthResult {
+  ok: boolean;
+  user?: AuthUser;
+  error?: string;
+  fieldErrors?: Record<string, string>;
+}
 
 interface AuthContextValue {
   user: AuthUser | null;
@@ -23,6 +60,13 @@ interface AuthContextValue {
   closeAuthModal: () => void;
   refreshSession: () => Promise<void>;
   refreshConfigStatus: () => Promise<void>;
+  registerAccount: (params: RegisterParams) => Promise<AuthResult>;
+  loginWithPassword: (params: {
+    identifier: string;
+    password: string;
+    rememberMe?: boolean;
+  }) => Promise<AuthResult>;
+  updateProfile: (params: UpdateProfileParams) => Promise<AuthResult>;
   sendOtp: (
     phone: string,
     mode: 'register' | 'login'
@@ -34,11 +78,17 @@ interface AuthContextValue {
     rememberMe: boolean;
   }) => Promise<{ ok: boolean; isNewAccount?: boolean; user?: AuthUser; error?: string }>;
   completeProfile: (params: {
-    fullName: string;
+    firstName?: string;
+    lastName?: string;
+    fullName?: string;
+    age?: number;
+    countryCode?: string;
+    localPhone?: string;
+    phone?: string;
     villageName: string;
     email: string;
     accountRole: UserRole;
-  }) => Promise<{ ok: boolean; user?: AuthUser; error?: string }>;
+  }) => Promise<AuthResult>;
   unlockSupportTeam: (passcode: string) => Promise<{ ok: boolean; error?: string }>;
   logout: () => Promise<void>;
 }
@@ -87,6 +137,57 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     void refreshSession();
   }, [refreshConfigStatus, refreshSession]);
 
+  const registerAccount = async (params: RegisterParams): Promise<AuthResult> => {
+    const { status, data } = await apiRegisterAccount(params);
+    if (status >= 200 && status < 300 && data.ok && data.user) {
+      if (data.sessionToken) {
+        setStoredSessionToken(data.sessionToken, params.rememberMe !== false);
+      }
+      setUser(data.user);
+      setIsSupportTeam(Boolean(data.user.isSupportAdmin));
+      return { ok: true, user: data.user };
+    }
+    return {
+      ok: false,
+      error: data.error || 'Could not complete registration.',
+      fieldErrors: data.fieldErrors,
+    };
+  };
+
+  const loginWithPassword = async (params: {
+    identifier: string;
+    password: string;
+    rememberMe?: boolean;
+  }): Promise<AuthResult> => {
+    const { status, data } = await apiLoginWithPassword(params);
+    if (status >= 200 && status < 300 && data.ok && data.user) {
+      if (data.sessionToken) {
+        setStoredSessionToken(data.sessionToken, params.rememberMe !== false);
+      }
+      setUser(data.user);
+      setIsSupportTeam(Boolean(data.user.isSupportAdmin));
+      return { ok: true, user: data.user };
+    }
+    return {
+      ok: false,
+      error: data.error || 'Invalid credentials.',
+      fieldErrors: data.fieldErrors,
+    };
+  };
+
+  const updateProfile = async (params: UpdateProfileParams): Promise<AuthResult> => {
+    const { status, data } = await apiUpdateUserProfile(params);
+    if (status >= 200 && status < 300 && data.ok && data.user) {
+      setUser(data.user);
+      return { ok: true, user: data.user };
+    }
+    return {
+      ok: false,
+      error: data.error || 'Could not update profile.',
+      fieldErrors: data.fieldErrors,
+    };
+  };
+
   const sendOtp = async (phone: string, mode: 'register' | 'login') => {
     const { data } = await requestPhoneOtp(phone, mode);
     return data;
@@ -110,17 +211,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const completeProfile = async (params: {
-    fullName: string;
+    firstName?: string;
+    lastName?: string;
+    fullName?: string;
+    age?: number;
+    countryCode?: string;
+    localPhone?: string;
+    phone?: string;
     villageName: string;
     email: string;
     accountRole: UserRole;
-  }) => {
+  }): Promise<AuthResult> => {
     const { status, data } = await saveUserProfile(params);
     if (status >= 200 && status < 300 && data.ok && data.user) {
       setUser(data.user);
       return { ok: true, user: data.user };
     }
-    return { ok: false, error: data.error || 'Could not save profile.' };
+    return {
+      ok: false,
+      error: data.error || 'Could not save profile.',
+      fieldErrors: data.fieldErrors,
+    };
   };
 
   const unlockSupportTeam = async (passcode: string) => {
@@ -165,6 +276,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         closeAuthModal: () => setAuthModalOpen(false),
         refreshSession,
         refreshConfigStatus,
+        registerAccount,
+        loginWithPassword,
+        updateProfile,
         sendOtp,
         verifyOtp,
         completeProfile,

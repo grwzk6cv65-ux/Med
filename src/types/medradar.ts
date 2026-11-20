@@ -11,7 +11,8 @@ export type ModuleId =
   | 'passport_referrals'
   | 'care_loop'
   | 'analytics'
-  | 'support';
+  | 'support'
+  | 'profile';
 
 export type RiskLevel = 'low' | 'moderate' | 'high' | 'critical';
 
@@ -243,8 +244,13 @@ export interface RadarAssessment {
 
 export interface AuthUser {
   id: string;
-  phoneE164: string;
+  firstName: string;
+  lastName: string;
   fullName: string;
+  age: number | null;
+  phoneE164: string;
+  countryCode?: string;
+  localPhone?: string;
   villageName: string;
   email: string;
   accountRole: UserRole;

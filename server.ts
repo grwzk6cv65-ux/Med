@@ -46,10 +46,16 @@ type SupportTicketStatus = 'New' | 'In Progress' | 'Resolved';
 
 interface StoredUser {
   id: string;
-  phoneE164: string;
+  firstName: string;
+  lastName: string;
   fullName: string;
+  age: number | null;
+  phoneE164: string;
+  countryCode?: string;
+  localPhone?: string;
   villageName: string;
   email: string;
+  passwordHash?: string;
   accountRole: 'patient' | 'doctor';
   isSupportAdmin: boolean;
   profileCompleted: boolean;
@@ -103,6 +109,32 @@ interface StoreShape {
   supportTickets: StoredSupportTicket[];
 }
 
+function normalizeStoredUser(raw: Partial<StoredUser>): StoredUser {
+  const fullName = String(raw.fullName || '').trim();
+  const parts = fullName ? fullName.split(/\s+/) : [];
+  const firstName = String(raw.firstName || parts[0] || '').trim();
+  const lastName = String(raw.lastName || parts.slice(1).join(' ') || '').trim();
+  const combined = `${firstName} ${lastName}`.trim() || fullName;
+  return {
+    id: String(raw.id || `USR-${crypto.randomUUID()}`),
+    firstName,
+    lastName,
+    fullName: combined,
+    age: typeof raw.age === 'number' && Number.isFinite(raw.age) ? raw.age : null,
+    phoneE164: String(raw.phoneE164 || ''),
+    countryCode: raw.countryCode ? String(raw.countryCode) : undefined,
+    localPhone: raw.localPhone ? String(raw.localPhone) : undefined,
+    villageName: String(raw.villageName || ''),
+    email: String(raw.email || ''),
+    passwordHash: typeof raw.passwordHash === 'string' ? raw.passwordHash : undefined,
+    accountRole: raw.accountRole === 'doctor' ? 'doctor' : 'patient',
+    isSupportAdmin: Boolean(raw.isSupportAdmin),
+    profileCompleted: Boolean(raw.profileCompleted),
+    createdAt: String(raw.createdAt || new Date().toISOString()),
+    updatedAt: String(raw.updatedAt || new Date().toISOString()),
+  };
+}
+
 function ensureStore(): StoreShape {
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
@@ -121,7 +153,7 @@ function ensureStore(): StoreShape {
     const raw = fs.readFileSync(STORE_PATH, 'utf8');
     const parsed = JSON.parse(raw) as Partial<StoreShape>;
     return {
-      users: Array.isArray(parsed.users) ? parsed.users : [],
+      users: Array.isArray(parsed.users) ? parsed.users.map(normalizeStoredUser) : [],
       sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
       otpChallenges: Array.isArray(parsed.otpChallenges) ? parsed.otpChallenges : [],
       supportTickets: Array.isArray(parsed.supportTickets) ? parsed.supportTickets : [],
@@ -160,6 +192,41 @@ function normalizePhoneE164(raw: string): string | null {
   const cleaned = raw.replace(/[\s\-().]/g, '');
   if (!/^\+[1-9]\d{7,14}$/.test(cleaned)) return null;
   return cleaned;
+}
+
+function hashPassword(password: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `scrypt$${salt}$${derived}`;
+}
+
+function verifyPassword(password: string, storedHash?: string): boolean {
+  if (!storedHash) return false;
+  const parts = storedHash.split('$');
+  if (parts.length !== 3 || parts[0] !== 'scrypt') return false;
+  const [, salt, expectedHex] = parts;
+  if (!salt || !expectedHex) return false;
+  const actualBuf = crypto.scryptSync(password, salt, 64);
+  const expectedBuf = Buffer.from(expectedHex, 'hex');
+  if (actualBuf.length !== expectedBuf.length) return false;
+  return crypto.timingSafeEqual(actualBuf, expectedBuf);
+}
+
+function sanitizeUser(user: StoredUser): Omit<StoredUser, 'passwordHash'> {
+  const { passwordHash: _removed, ...safeUser } = user;
+  return safeUser;
+}
+
+function splitPhoneParts(countryCodeInput: string, localPhoneInput: string, fullPhoneInput: string) {
+  const rawCC = countryCodeInput.trim();
+  const rawLocal = localPhoneInput.replace(/\D/g, '');
+  const combined = fullPhoneInput.trim() || `${rawCC}${rawLocal}`;
+  const phoneE164 = normalizePhoneE164(combined);
+  return {
+    phoneE164,
+    countryCode: rawCC || undefined,
+    localPhone: rawLocal || undefined,
+  };
 }
 
 function parseCookies(req: Request): Record<string, string> {
@@ -575,8 +642,11 @@ async function startServer() {
         isNewAccount = true;
         user = {
           id: `USR-${crypto.randomUUID()}`,
-          phoneE164,
+          firstName: '',
+          lastName: '',
           fullName: '',
+          age: null,
+          phoneE164,
           villageName: '',
           email: '',
           accountRole: 'patient',
@@ -610,7 +680,7 @@ async function startServer() {
 
       res.json({
         ok: true,
-        user,
+        user: sanitizeUser(user),
         isNewAccount,
         sessionToken: rawToken,
         expiresAt,
@@ -624,35 +694,309 @@ async function startServer() {
     }
   });
 
+  // 3b. Full Registration with Personal Details & Password
+  app.post('/api/auth/register', (req: Request, res: Response) => {
+    const firstName = String(req.body?.firstName || '').trim();
+    const lastName = String(req.body?.lastName || '').trim();
+    const ageRaw = String(req.body?.age ?? '').trim();
+    const countryCode = String(req.body?.countryCode || '').trim();
+    const localPhone = String(req.body?.localPhone || '').trim();
+    const phoneInput = String(req.body?.phone || '').trim();
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const password = String(req.body?.password || '');
+    const confirmPassword = String(req.body?.confirmPassword || '');
+    const villageName = String(req.body?.villageName || '').trim();
+    const accountRole = req.body?.accountRole === 'doctor' ? 'doctor' : 'patient';
+    const rememberMe = req.body?.rememberMe !== false;
+
+    const fieldErrors: Record<string, string> = {};
+
+    if (firstName.length < 2 || firstName.length > 40) {
+      fieldErrors.firstName = 'First name must be between 2 and 40 characters.';
+    }
+    if (lastName.length < 2 || lastName.length > 40) {
+      fieldErrors.lastName = 'Last name must be between 2 and 40 characters.';
+    }
+
+    const ageNum = /^\d+$/.test(ageRaw) ? Number.parseInt(ageRaw, 10) : Number.NaN;
+    if (!Number.isInteger(ageNum) || ageNum < 1 || ageNum > 120) {
+      fieldErrors.age = 'Age must be a valid whole number between 1 and 120.';
+    }
+
+    const { phoneE164, countryCode: cc, localPhone: lp } = splitPhoneParts(
+      countryCode,
+      localPhone,
+      phoneInput
+    );
+    if (!phoneE164 || (localPhone && localPhone.replace(/\D/g, '').length < 7)) {
+      fieldErrors.phone = 'Enter a valid phone number with country code (e.g. +7 701 555 0101).';
+    }
+
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      fieldErrors.email = 'Enter a valid email address.';
+    }
+
+    if (password.length < 6 || password.length > 128) {
+      fieldErrors.password = 'Password must be at least 6 characters long.';
+    }
+    if (!confirmPassword) {
+      fieldErrors.confirmPassword = 'Please confirm your password.';
+    } else if (password !== confirmPassword) {
+      fieldErrors.confirmPassword = 'Passwords do not match.';
+    }
+
+    if (Object.keys(fieldErrors).length > 0) {
+      res.status(400).json({
+        ok: false,
+        code: 'VALIDATION_ERROR',
+        error: Object.values(fieldErrors)[0],
+        fieldErrors,
+      });
+      return;
+    }
+
+    const store = ensureStore();
+    const existingByEmail = store.users.find((u) => u.email.toLowerCase() === email);
+    if (existingByEmail) {
+      res.status(409).json({
+        ok: false,
+        code: 'EMAIL_EXISTS',
+        error: 'An account with this email already exists. Please sign in.',
+        fieldErrors: { email: 'An account with this email is already registered.' },
+      });
+      return;
+    }
+
+    const existingByPhone = store.users.find((u) => u.phoneE164 === phoneE164);
+    if (existingByPhone) {
+      res.status(409).json({
+        ok: false,
+        code: 'PHONE_EXISTS',
+        error: 'An account with this phone number already exists. Please sign in.',
+        fieldErrors: { phone: 'An account with this phone number is already registered.' },
+      });
+      return;
+    }
+
+    const nowIso = new Date().toISOString();
+    const isSupportAdmin = isPhoneSupportAdmin(phoneE164!);
+    const newUser: StoredUser = {
+      id: `USR-${crypto.randomUUID()}`,
+      firstName,
+      lastName,
+      fullName: `${firstName} ${lastName}`.trim(),
+      age: ageNum,
+      phoneE164: phoneE164!,
+      countryCode: cc,
+      localPhone: lp,
+      villageName,
+      email,
+      passwordHash: hashPassword(password),
+      accountRole,
+      isSupportAdmin,
+      profileCompleted: true,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const ttlMs = rememberMe ? SESSION_TTL_REMEMBER_MS : SESSION_TTL_DEFAULT_MS;
+    const expiresAt = Date.now() + ttlMs;
+
+    store.users.push(newUser);
+    store.sessions.push({
+      tokenHash: sha256(rawToken),
+      userId: newUser.id,
+      isSupportAdmin,
+      rememberMe,
+      expiresAt,
+      createdAt: nowIso,
+    });
+    saveStore(store);
+
+    const isSecure = req.secure || req.headers['x-forwarded-proto'] === 'https';
+    setCookieHeader(res, SESSION_COOKIE_NAME, rawToken, ttlMs, isSecure);
+
+    res.status(201).json({
+      ok: true,
+      user: sanitizeUser(newUser),
+      sessionToken: rawToken,
+      expiresAt,
+    });
+  });
+
+  // 3c. Login with Email or Phone Number + Password
+  app.post('/api/auth/login', (req: Request, res: Response) => {
+    const identifier = String(req.body?.identifier || '').trim();
+    const password = String(req.body?.password || '');
+    const rememberMe = req.body?.rememberMe !== false;
+
+    const fieldErrors: Record<string, string> = {};
+    if (!identifier) {
+      fieldErrors.identifier = 'Enter your email address or phone number.';
+    }
+    if (!password) {
+      fieldErrors.password = 'Enter your password.';
+    }
+    if (Object.keys(fieldErrors).length > 0) {
+      res.status(400).json({
+        ok: false,
+        code: 'VALIDATION_ERROR',
+        error: Object.values(fieldErrors)[0],
+        fieldErrors,
+      });
+      return;
+    }
+
+    const store = ensureStore();
+    const normalizedEmail = identifier.toLowerCase();
+    const normalizedPhone = normalizePhoneE164(identifier);
+
+    const user = store.users.find((u) => {
+      if (u.email && u.email.toLowerCase() === normalizedEmail) return true;
+      if (normalizedPhone && u.phoneE164 === normalizedPhone) return true;
+      return false;
+    });
+
+    if (!user) {
+      res.status(401).json({
+        ok: false,
+        code: 'INVALID_CREDENTIALS',
+        error: 'No account matches this email/phone or password.',
+        fieldErrors: { identifier: 'Invalid email, phone number, or password.' },
+      });
+      return;
+    }
+
+    if (!user.passwordHash) {
+      res.status(401).json({
+        ok: false,
+        code: 'PASSWORD_NOT_SET',
+        error: 'This account was registered via SMS only. Sign in with SMS verification code.',
+        fieldErrors: { password: 'Use SMS code sign-in for this phone-only account.' },
+      });
+      return;
+    }
+
+    if (!verifyPassword(password, user.passwordHash)) {
+      res.status(401).json({
+        ok: false,
+        code: 'INVALID_CREDENTIALS',
+        error: 'Incorrect password.',
+        fieldErrors: { password: 'Incorrect password.' },
+      });
+      return;
+    }
+
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const ttlMs = rememberMe ? SESSION_TTL_REMEMBER_MS : SESSION_TTL_DEFAULT_MS;
+    const expiresAt = Date.now() + ttlMs;
+    const nowIso = new Date().toISOString();
+
+    store.sessions.push({
+      tokenHash: sha256(rawToken),
+      userId: user.id,
+      isSupportAdmin: Boolean(user.isSupportAdmin),
+      rememberMe,
+      expiresAt,
+      createdAt: nowIso,
+    });
+    saveStore(store);
+
+    const isSecure = req.secure || req.headers['x-forwarded-proto'] === 'https';
+    setCookieHeader(res, SESSION_COOKIE_NAME, rawToken, ttlMs, isSecure);
+
+    res.json({
+      ok: true,
+      user: sanitizeUser(user),
+      sessionToken: rawToken,
+      expiresAt,
+    });
+  });
+
   // 4. Current Authenticated User
   app.get('/api/auth/me', (req: Request, res: Response) => {
     const ctx = getAuthContext(req);
     res.json({
       authenticated: Boolean(ctx.user),
-      user: ctx.user || null,
+      user: ctx.user ? sanitizeUser(ctx.user) : null,
       isSupportTeam: ctx.isSupportTeam,
     });
   });
 
-  // 5. Complete or Update Authenticated User Profile
-  app.post('/api/auth/complete-profile', (req: Request, res: Response) => {
+  // 5. Update Authenticated User Profile ("Мой профиль")
+  const handleUpdateProfile = (req: Request, res: Response) => {
     const ctx = getAuthContext(req);
     if (!ctx.user) {
       res.status(401).json({ ok: false, error: 'Authentication required.' });
       return;
     }
 
-    const fullName = String(req.body?.fullName || '').trim();
-    const villageName = String(req.body?.villageName || '').trim();
-    const email = String(req.body?.email || '').trim();
-    const accountRole = req.body?.accountRole === 'doctor' ? 'doctor' : 'patient';
+    const firstNameInput = String(req.body?.firstName || '').trim();
+    const lastNameInput = String(req.body?.lastName || '').trim();
+    const legacyFullName = String(req.body?.fullName || '').trim();
+    const firstName = firstNameInput || legacyFullName.split(/\s+/)[0] || '';
+    const lastName = lastNameInput || legacyFullName.split(/\s+/).slice(1).join(' ') || '';
+    const fullName = `${firstName} ${lastName}`.trim() || legacyFullName;
 
-    if (fullName.length < 2 || fullName.length > 80) {
-      res.status(400).json({ ok: false, error: 'Full name must be between 2 and 80 characters.' });
-      return;
+    const ageRaw = req.body?.age !== undefined && req.body?.age !== null ? String(req.body.age).trim() : '';
+    const countryCodeInput = String(req.body?.countryCode || ctx.user.countryCode || '').trim();
+    const localPhoneInput = String(req.body?.localPhone || '').trim();
+    const phoneInput = String(req.body?.phone || ctx.user.phoneE164 || '').trim();
+    const email = String(req.body?.email ?? ctx.user.email ?? '').trim().toLowerCase();
+    const villageName = String(req.body?.villageName ?? ctx.user.villageName ?? '').trim();
+    const accountRole =
+      req.body?.accountRole === 'doctor'
+        ? 'doctor'
+        : req.body?.accountRole === 'patient'
+          ? 'patient'
+          : ctx.user.accountRole;
+
+    const fieldErrors: Record<string, string> = {};
+
+    if (firstName.length < 2 || firstName.length > 40) {
+      fieldErrors.firstName = 'First name must be between 2 and 40 characters.';
     }
-    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      res.status(400).json({ ok: false, error: 'Please enter a valid email address.' });
+    if (lastNameInput !== '' && (lastName.length < 2 || lastName.length > 40)) {
+      fieldErrors.lastName = 'Last name must be between 2 and 40 characters.';
+    } else if (req.body?.lastName !== undefined && lastName.length < 2) {
+      fieldErrors.lastName = 'Last name must be between 2 and 40 characters.';
+    }
+
+    let nextAge: number | null = ctx.user.age;
+    if (req.body?.age !== undefined) {
+      const parsedAge = /^\d+$/.test(ageRaw) ? Number.parseInt(ageRaw, 10) : Number.NaN;
+      if (!Number.isInteger(parsedAge) || parsedAge < 1 || parsedAge > 120) {
+        fieldErrors.age = 'Age must be a valid whole number between 1 and 120.';
+      } else {
+        nextAge = parsedAge;
+      }
+    }
+
+    const { phoneE164, countryCode, localPhone } =
+      localPhoneInput || req.body?.phone !== undefined
+        ? splitPhoneParts(countryCodeInput, localPhoneInput, localPhoneInput ? `${countryCodeInput}${localPhoneInput}` : phoneInput)
+        : {
+            phoneE164: ctx.user.phoneE164,
+            countryCode: ctx.user.countryCode,
+            localPhone: ctx.user.localPhone,
+          };
+
+    if (!phoneE164) {
+      fieldErrors.phone = 'Enter a valid phone number with country code.';
+    }
+
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      fieldErrors.email = 'Please enter a valid email address.';
+    }
+
+    if (Object.keys(fieldErrors).length > 0) {
+      res.status(400).json({
+        ok: false,
+        code: 'VALIDATION_ERROR',
+        error: Object.values(fieldErrors)[0],
+        fieldErrors,
+      });
       return;
     }
 
@@ -663,9 +1007,35 @@ async function startServer() {
       return;
     }
 
+    if (store.users.some((u) => u.id !== ctx.user!.id && u.email.toLowerCase() === email)) {
+      res.status(409).json({
+        ok: false,
+        code: 'EMAIL_EXISTS',
+        error: 'This email is already used by another account.',
+        fieldErrors: { email: 'This email is already registered to another user.' },
+      });
+      return;
+    }
+
+    if (store.users.some((u) => u.id !== ctx.user!.id && u.phoneE164 === phoneE164)) {
+      res.status(409).json({
+        ok: false,
+        code: 'PHONE_EXISTS',
+        error: 'This phone number is already used by another account.',
+        fieldErrors: { phone: 'This phone number is already registered to another user.' },
+      });
+      return;
+    }
+
     store.users[idx] = {
       ...store.users[idx],
+      firstName,
+      lastName,
       fullName,
+      age: nextAge,
+      phoneE164: phoneE164!,
+      countryCode: countryCode ?? store.users[idx].countryCode,
+      localPhone: localPhone ?? store.users[idx].localPhone,
       villageName,
       email,
       accountRole,
@@ -674,8 +1044,11 @@ async function startServer() {
     };
     saveStore(store);
 
-    res.json({ ok: true, user: store.users[idx] });
-  });
+    res.json({ ok: true, user: sanitizeUser(store.users[idx]) });
+  };
+
+  app.post('/api/auth/complete-profile', handleUpdateProfile);
+  app.patch('/api/auth/profile', handleUpdateProfile);
 
   // 6. Logout
   app.post('/api/auth/logout', (req: Request, res: Response) => {

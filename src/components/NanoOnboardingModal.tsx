@@ -10,7 +10,7 @@ import {
   MessageSquareHeart,
   X,
 } from 'lucide-react';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useMedradar } from '../context/MedradarContext';
 import { Language, ModuleId } from '../types/medradar';
 import { NanoCharacter } from './NanoCharacter';
@@ -20,6 +20,7 @@ interface NanoOnboardingModalProps {
   step: number;
   onStepChange: (step: number) => void;
   onComplete: () => void;
+  onPreviewModule?: (module: ModuleId, tourTarget: string) => void;
 }
 
 const TOTAL_STEPS = 6;
@@ -73,13 +74,18 @@ export function NanoOnboardingModal({
   step,
   onStepChange,
   onComplete,
+  onPreviewModule,
 }: NanoOnboardingModalProps) {
   const { t, language, setLanguage, role, setRole, setActiveModule, setHighlightedTourTarget } =
     useMedradar();
+  const skipClearOnCloseRef = useRef(false);
 
   useEffect(() => {
     if (!isOpen) {
-      setHighlightedTourTarget(null);
+      if (!skipClearOnCloseRef.current) {
+        setHighlightedTourTarget(null);
+      }
+      skipClearOnCloseRef.current = false;
       return;
     }
     if (step === 0) {
@@ -88,8 +94,25 @@ export function NanoOnboardingModal({
       const target = WALKTHROUGH_STEPS[step - 1]?.tourTarget ?? null;
       setHighlightedTourTarget(target);
     }
-    return () => setHighlightedTourTarget(null);
+    return () => {
+      if (!skipClearOnCloseRef.current) {
+        setHighlightedTourTarget(null);
+      }
+    };
   }, [isOpen, step, setHighlightedTourTarget]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        skipClearOnCloseRef.current = false;
+        setHighlightedTourTarget(null);
+        onComplete();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isOpen, onComplete, setHighlightedTourTarget]);
 
   if (!isOpen) return null;
 
@@ -108,8 +131,21 @@ export function NanoOnboardingModal({
   };
 
   const handleFinishOrSkip = () => {
+    skipClearOnCloseRef.current = false;
     setHighlightedTourTarget(null);
     onComplete();
+  };
+
+  const handlePreviewAndOpen = () => {
+    if (!currentWalkthrough) return;
+    skipClearOnCloseRef.current = true;
+    setActiveModule(currentWalkthrough.module);
+    setHighlightedTourTarget(currentWalkthrough.tourTarget);
+    if (onPreviewModule) {
+      onPreviewModule(currentWalkthrough.module, currentWalkthrough.tourTarget);
+    } else {
+      onComplete();
+    }
   };
 
   return (
@@ -269,10 +305,7 @@ export function NanoOnboardingModal({
                   </div>
                   <button
                     type="button"
-                    onClick={() => {
-                      setActiveModule(currentWalkthrough.module);
-                      setHighlightedTourTarget(currentWalkthrough.tourTarget);
-                    }}
+                    onClick={handlePreviewAndOpen}
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-900 bg-white hover:bg-emerald-100 border border-emerald-300 rounded-lg transition-colors whitespace-nowrap"
                   >
                     <span>{t('nano_preview_module')}</span>

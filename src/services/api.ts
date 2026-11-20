@@ -110,14 +110,81 @@ export async function verifyPhoneOtp(params: {
   });
 }
 
+export interface AuthApiResponse {
+  ok: boolean;
+  user?: AuthUser;
+  isNewAccount?: boolean;
+  sessionToken?: string;
+  expiresAt?: number;
+  configured?: boolean;
+  code?: string;
+  missingVars?: string[];
+  error?: string;
+  fieldErrors?: Record<string, string>;
+}
+
+export async function registerAccount(params: {
+  firstName: string;
+  lastName: string;
+  age: number;
+  countryCode: string;
+  localPhone: string;
+  phone: string;
+  email: string;
+  password: string;
+  confirmPassword: string;
+  villageName?: string;
+  accountRole?: UserRole;
+  rememberMe?: boolean;
+}) {
+  return apiFetch<AuthApiResponse>('/api/auth/register', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+export async function loginWithPassword(params: {
+  identifier: string;
+  password: string;
+  rememberMe?: boolean;
+}) {
+  return apiFetch<AuthApiResponse>('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
 export async function saveUserProfile(params: {
-  fullName: string;
+  firstName?: string;
+  lastName?: string;
+  fullName?: string;
+  age?: number;
+  countryCode?: string;
+  localPhone?: string;
+  phone?: string;
   villageName: string;
   email: string;
   accountRole: UserRole;
 }) {
-  return apiFetch<{ ok: boolean; user?: AuthUser; error?: string }>('/api/auth/complete-profile', {
+  return apiFetch<AuthApiResponse>('/api/auth/complete-profile', {
     method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+export async function updateUserProfile(params: {
+  firstName: string;
+  lastName: string;
+  age: number;
+  countryCode: string;
+  localPhone: string;
+  phone: string;
+  email: string;
+  villageName?: string;
+  accountRole?: UserRole;
+}) {
+  return apiFetch<AuthApiResponse>('/api/auth/profile', {
+    method: 'PATCH',
     body: JSON.stringify(params),
   });
 }

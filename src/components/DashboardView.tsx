@@ -129,6 +129,7 @@ export function DashboardView() {
 
           <div className="flex flex-wrap md:justify-end gap-2">
             <button
+              type="button"
               onClick={() => setActiveModule('passport_referrals')}
               className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-zinc-950 bg-emerald-500 hover:bg-emerald-400 rounded-lg transition-colors whitespace-nowrap"
             >
@@ -147,6 +148,7 @@ export function DashboardView() {
                 <span>{t('dash_patient_next_visit')}</span>
               </h2>
               <button
+                type="button"
                 onClick={() => setActiveModule('medmobile')}
                 className="text-xs font-medium text-emerald-700 hover:underline whitespace-nowrap"
               >
@@ -207,6 +209,7 @@ export function DashboardView() {
                 <span>{t('dash_patient_reminders')}</span>
               </h2>
               <button
+                type="button"
                 onClick={() => setActiveModule('care_loop')}
                 className="text-xs font-medium text-emerald-700 hover:underline whitespace-nowrap"
               >
@@ -234,6 +237,7 @@ export function DashboardView() {
                       <WorkflowStatusTag status={rem.status} />
                       {rem.status !== 'completed' && (
                         <button
+                          type="button"
                           onClick={() => toggleReminderStatus(rem.id, 'completed')}
                           className="px-2.5 py-1 text-[11px] font-medium bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-md"
                         >
@@ -255,6 +259,7 @@ export function DashboardView() {
               {t('dash_patient_journey_preview')}
             </h2>
             <button
+              type="button"
               onClick={() => setActiveModule('care_loop')}
               className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:underline"
             >
@@ -306,6 +311,7 @@ export function DashboardView() {
           <p className="mt-1 text-sm text-zinc-600 max-w-3xl">{t('dash_doctor_sub')}</p>
         </div>
         <button
+          type="button"
           onClick={() => setActiveModule('map')}
           className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-zinc-950 hover:bg-zinc-800 rounded-lg transition-colors whitespace-nowrap shrink-0"
         >
@@ -360,6 +366,7 @@ export function DashboardView() {
             <span>{t('dash_triage_queue')}</span>
           </h2>
           <button
+            type="button"
             onClick={() => setActiveModule('ai_radar')}
             className="text-xs font-medium text-emerald-700 hover:underline whitespace-nowrap"
           >
@@ -390,6 +397,7 @@ export function DashboardView() {
                   </td>
                   <td className="py-3 px-4">
                     <button
+                      type="button"
                       onClick={() => {
                         if (village) setSelectedVillageId(village.id);
                         setActiveModule('map');
@@ -415,6 +423,7 @@ export function DashboardView() {
                   <td className="py-3 px-4 text-right whitespace-nowrap">
                     <div className="inline-flex items-center gap-1.5">
                       <button
+                        type="button"
                         onClick={() => {
                           setActivePatientId(patient.id);
                           setActiveModule('ai_radar');
@@ -424,6 +433,7 @@ export function DashboardView() {
                         {t('dash_open_radar')}
                       </button>
                       <button
+                        type="button"
                         onClick={() => {
                           createSmartReferral({
                             patientId: patient.id,
@@ -457,6 +467,7 @@ export function DashboardView() {
               <span>{t('dash_todays_medmobile')}</span>
             </h2>
             <button
+              type="button"
               onClick={() => setActiveModule('medmobile')}
               className="text-xs font-medium text-emerald-700 hover:underline"
             >
@@ -490,6 +501,7 @@ export function DashboardView() {
               <span>{t('dash_loop_alerts')}</span>
             </h2>
             <button
+              type="button"
               onClick={() => setActiveModule('care_loop')}
               className="text-xs font-medium text-emerald-700 hover:underline"
             >
@@ -514,6 +526,7 @@ export function DashboardView() {
                       </div>
                     </div>
                     <button
+                      type="button"
                       onClick={() => closeCareLoop(ref.id, 'Verified from Doctor Command')}
                       className="px-2.5 py-1 text-[11px] font-medium bg-zinc-950 hover:bg-zinc-800 text-emerald-400 rounded-md whitespace-nowrap shrink-0"
                     >

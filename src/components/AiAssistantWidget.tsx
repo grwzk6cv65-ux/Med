@@ -90,6 +90,12 @@ export function AiAssistantWidget() {
     }
   }, [messages, isOpen, showRemForm, showSupportForm]);
 
+  useEffect(() => {
+    const handleOpenNano = () => setIsOpen(true);
+    window.addEventListener('medradar:open-nano', handleOpenNano);
+    return () => window.removeEventListener('medradar:open-nano', handleOpenNano);
+  }, []);
+
   const openSupportComposer = (prefillIssue?: string) => {
     setShowRemForm(false);
     setSupError(null);
